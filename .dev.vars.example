@@ -1,0 +1,13 @@
+# Copy to .dev.vars for `wrangler dev`. NEVER commit .dev.vars (it holds secrets).
+# These map to the CLI-only secrets in production.
+
+# X-API-Key sent to Gorelo. Needs scopes: ticket write, asset/contact/client read.
+GORELO_API_KEY="your-gorelo-api-key"
+
+# The key Tier2 sends us in the X-API-Key header on each ticket POST. Pick any
+# strong random string and configure the same value in the Helpdesk Buttons
+# osTicket integration.
+EXPECTED_KEY="a-long-random-shared-secret"
+
+# Gates POST /admin/sync (sent as X-Admin-Key, X-API-Key, or Authorization: Bearer).
+ADMIN_KEY="another-long-random-secret"

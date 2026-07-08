@@ -1,0 +1,57 @@
+name = "tier2tickets-relay"
+main = "src/index.ts"
+compatibility_date = "2024-11-27"
+compatibility_flags = ["nodejs_compat"]
+
+# Refresh the D1 mirror of Gorelo agents/clients every 6 hours (off the request path).
+# Tune as needed; syncAll() is idempotent.
+[triggers]
+crons = ["0 */6 * * *"]
+
+[vars]
+# US: https://api.usw.gorelo.io   AU: https://api.aue.gorelo.io
+GORELO_BASE_URL = "https://api.usw.gorelo.io"
+
+# When "true", only Tier2's two fixed source IPs (via CF-Connecting-IP) may POST tickets.
+ENFORCE_IP_ALLOWLIST = "true"
+
+# --- Gorelo IDs: fill these from scripts/gorelo-ids.sh (values below are from the live Salient tenant) ---
+# groupId / typeId / priorityId / sourceId are NON-NULLABLE on CreatePublicTicketCommand
+# and must always be sent, so these have no safe zero-default.
+#
+# Groups (from the Gorelo UI): 2051 "Everyone" (general help queue, help@salientmsp.com),
+# 2052 "Escalations", 4084 "Security". Button presses go to the general queue.
+# (GET /v1/organization/groups returns 403 for this key — the Worker never calls it at
+# runtime, so no scope change is needed; the id below was taken from the UI.)
+DEFAULT_GROUP_ID = "2051"
+
+# GET /v1/tickets/types -> 7045 "Incident" (unplanned interruption; fits a button press).
+# Alternatives: 7046 Request, 7047 Proactive, 7048 Internal, 8412 Outage.
+DEFAULT_TYPE_ID = "7045"
+
+# PublicTicketPriority enum = [0,1,2,3,4]. Ships WITHOUT labels in the spec.
+# TODO(verify): confirm which int is your desired default priority in the Gorelo UI. 2 = a middle default.
+DEFAULT_PRIORITY = "2"
+
+# TicketSource enum = [1,2,3,4,5,6]. Ships WITHOUT labels in the spec.
+# TODO(verify): confirm which int maps to the "integration/portal/API" source in the Gorelo UI.
+DEFAULT_SOURCE = "4"
+
+# Fallback client when no machine/domain match is found.
+# GET /v1/clients -> 15567 "Salient MSP" (isDefault:true) — unmatched presses land on the
+# MSP's own default client with a triage note for a tech to reassign.
+CATCHALL_CLIENT_ID = "15567"
+
+# --- Secrets (set via CLI, never committed) ---
+#   wrangler secret put GORELO_API_KEY   # X-API-Key for Gorelo (ticket write + asset/contact/client read scopes)
+#   wrangler secret put EXPECTED_KEY     # the "API key" Tier2 sends us in X-API-Key (gates ticket creation)
+#   wrangler secret put ADMIN_KEY        # gates POST /admin/sync (X-Admin-Key / X-API-Key / Authorization: Bearer)
+
+# --- D1 ---
+# Create once:  wrangler d1 create tier2tickets-relay
+# then paste the returned database_id below.
+[[d1_databases]]
+binding = "DB"
+database_name = "tier2tickets-relay"
+database_id = "fe2efa6c-f7d4-439b-adfd-3dc10ee0caa5"
+migrations_dir = "migrations"
