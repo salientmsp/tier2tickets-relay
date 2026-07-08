@@ -88,12 +88,14 @@ run `wrangler dev`.
 3. **API key:** set to the value you used for `EXPECTED_KEY`. Tier2 sends it as
    the `X-API-Key` header on every POST.
 4. **Dispatcher Rule** — append the machine-identity tag to `msg` so the Worker
-   can resolve the client. The tag the portal must emit is:
+   can resolve the client. Dispatcher Rules are **sandboxed Python 3** (variables
+   are bare names, not `{}` templates), so add this one-line rule:
 
-   ```
-   [[hdb host={hostname} mac={mac} ip={ip}]]
+   ```python
+   msg = msg + '\n\n[[hdb host=' + str(hostname) + ' mac=' + str(mac) + ' ip=' + str(ip) + ']]'
    ```
 
+   It yields e.g. `...\n\n[[hdb host=PC-01 mac=AA:BB:CC:DD:EE:FF ip=10.0.0.5]]`.
    The Worker parses this block and then **strips it** from the description so
    the client-facing ticket body stays clean. `mac`/`ip` are recorded as a
    triage note only (Gorelo has no MAC to match on; IP is unreliable under
@@ -102,6 +104,7 @@ run `wrangler dev`.
    Confirmed Tier2 osTicket Dispatcher variables: read-only `name`, `email`,
    `hostname`, `mac`, `ip`, `selections`; writable `msg`, `subject`, `append`,
    `priority`, `alert`, `auto_respond`. **No serial/uuid is available from Tier2.**
+   See the [Dispatcher Rules docs](https://docs.tier2tickets.com/content/automations/dispatcher/).
 
 5. Press **Integration Test** — it should return `201` with a ticket number.
 
@@ -179,13 +182,13 @@ A snapshot of the live spec is captured at [`docs/gorelo-swagger.v1.json`](docs/
   201 body); `extractTicketNumber` reads `ticketId` first.
 - ✅ **`GET /v1/assets/agents` pagination** — confirmed a bare array, no query
   params / pagination. Single call fetches the whole fleet.
+- ✅ **Dispatcher Rule syntax** — confirmed Dispatcher Rules are sandboxed
+  Python 3; the tag is built by concatenation, not `{}` interpolation. The rule
+  to configure is documented under "Helpdesk Buttons portal setup" above.
 
 Still to confirm against your tenant / portal:
 
-1. **Dispatcher Rule variable syntax** (`src/parse.ts`) — confirm the Helpdesk
-   Buttons portal actually emits `[[hdb host={hostname} mac={mac} ip={ip}]]`
-   (the parser tolerates ordering/whitespace/quotes and the `hostname` alias).
-2. **Priority/source enum labels** (`wrangler.toml`) — the spec ships
+1. **Priority/source enum labels** (`wrangler.toml`) — the spec ships
    `PublicTicketPriority=[0..4]` and `TicketSource=[1..6]` as **bare int enums with
    no labels**, and there is **no list endpoint** for them (and no GET-ticket
    endpoint to read a ticket back), so the API cannot reveal the mapping. Read the

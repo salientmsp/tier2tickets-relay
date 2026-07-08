@@ -3,6 +3,12 @@ main = "src/index.ts"
 compatibility_date = "2024-11-27"
 compatibility_flags = ["nodejs_compat"]
 
+# Workers Logs: capture console.log/console.warn (incl. the raw Gorelo create
+# response and any upstream failure bodies) in the dashboard for debugging.
+[observability.logs]
+enabled = true
+invocation_logs = true
+
 # Refresh the D1 mirror of Gorelo agents/clients every 6 hours (off the request path).
 # Tune as needed; syncAll() is idempotent.
 [triggers]

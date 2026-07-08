@@ -16,13 +16,14 @@ export interface HdbTag {
 }
 
 /**
- * The tag the Helpdesk Buttons Dispatcher Rule must append to `msg`:
- *   [[hdb host={hostname} mac={mac} ip={ip}]]
- *
- * TODO(verify #1): confirm the portal's Dispatcher variable interpolation syntax
- * (whether it emits `{hostname}` or another delimiter). Document the exact tag the
- * portal is configured to emit. The parser below is deliberately tolerant of
- * key ordering, extra whitespace, and missing keys.
+ * The Helpdesk Buttons Dispatcher Rule appends this tag to `msg`. Dispatcher
+ * Rules are sandboxed Python 3, so variables are bare names concatenated into
+ * the string — NOT `{}` template interpolation. The exact rule to configure is:
+ *   msg = msg + '\n\n[[hdb host=' + str(hostname) + ' mac=' + str(mac) + ' ip=' + str(ip) + ']]'
+ * which yields e.g.:
+ *   [[hdb host=PC-01 mac=AA:BB:CC:DD:EE:FF ip=10.0.0.5]]
+ * The parser below is deliberately tolerant of key ordering, extra whitespace,
+ * quotes, and missing keys.
  */
 const HDB_BLOCK_RE = /\[\[\s*hdb\b([^\]]*)\]\]/i;
 const HDB_KV_RE = /(\w+)\s*=\s*("([^"]*)"|'([^']*)'|[^\s\]]+)/g;
