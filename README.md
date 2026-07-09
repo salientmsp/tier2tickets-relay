@@ -112,9 +112,35 @@ run `wrangler dev`.
 
 | Method & path | Auth | Purpose |
 |---|---|---|
-| `POST /` (any non-admin path) | `X-API-Key: <EXPECTED_KEY>` + IP allowlist | Create a ticket (osTicket shape) |
+| `POST /` (any non-admin/non-Halo path) | `X-API-Key: <EXPECTED_KEY>` + IP allowlist | Create a ticket (osTicket shape) |
+| `POST /auth/token`, `/api/*` | OAuth2 client_credentials + IP allowlist | HaloPSA mock (see below) |
 | `POST /admin/sync` | `X-Admin-Key` / `X-API-Key` / `Authorization: Bearer` = `<ADMIN_KEY>` | Rebuild the D1 mirror on demand |
 | `GET /health` | none | Liveness check |
+
+## HaloPSA/ITSM mock (in progress — Phase 1: capture)
+
+osTicket is create-only, so Tier2 never does a PSA contact/asset lookup for it. To
+unlock those behaviors (recognizing the user, matching company/contact, attaching
+assets, bidirectional webhooks) the Worker also mocks **HaloPSA/ITSM**, the most
+capable ticket system Tier2 supports. Because Tier2's client is opaque and Halo has
+many endpoints, this is built in two phases:
+
+- **Phase 1 (current, `src/halo.ts`):** completes the OAuth2 `POST /auth/token`
+  handshake, **logs every request** (method / path / query / body, secrets redacted)
+  with a `HALO CAPTURE` prefix, and returns minimal, plausible Halo shapes (empty
+  `{ clients|users|assets: [] }` lookups; a synthetic numeric ticket id on
+  `POST /api/Tickets`). **No Gorelo writes yet** — this phase exists to capture
+  Tier2's exact request sequence safely.
+- **Phase 2 (next):** replace the synthetic responses with real Gorelo-backed
+  lookups (client/contact/asset) and ticket create, matched to the shapes the
+  capture reveals.
+
+**To capture:** set `HALO_CLIENT_ID` / `HALO_CLIENT_SECRET` secrets, configure a
+**test** Tier2 HaloPSA integration pointed at the Worker host (Resource Server *and*
+Authorization Server both = the Worker; API key `tenant+client_id:client_secret`),
+run the Integration Test + one press, then read the `HALO CAPTURE …` lines in the
+Workers logs. Paste those back to drive Phase 2. The osTicket path is untouched, so
+this can't disturb a working osTicket setup.
 
 ## Matching algorithm
 

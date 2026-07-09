@@ -1,13 +1,12 @@
 import { getLastSync, initSchema } from "./db.js";
 import { extractTicketNumber, GoreloClient, GoreloError } from "./gorelo.js";
+import { handleHalo, isHaloPath } from "./halo.js";
 import { matchClient } from "./matcher.js";
 import { buildIdentity, normalizeEmail, parseHdbTag, parseInbound, stripHdbTag } from "./parse.js";
 import { syncAll } from "./sync.js";
 import { buildDescription, buildTicketCommand } from "./ticket.js";
+import { ipAllowed } from "./tier2.js";
 import type { Env } from "./types.js";
-
-// Tier2Tickets cloud posts from these two fixed source IPs.
-const TIER2_SOURCE_IPS = new Set(["34.202.14.153", "3.209.57.193"]);
 
 const textResponse = (status: number, body: string): Response =>
   new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
@@ -59,6 +58,12 @@ export default {
       return textResponse(200, "ok");
     }
 
+    // HaloPSA/ITSM mock (OAuth token + resource server). Routed by path so it
+    // coexists with the osTicket path on the same Worker. See src/halo.ts.
+    if (isHaloPath(url.pathname)) {
+      return handleHalo(request, env);
+    }
+
     // Everything else that's a POST is treated as an osTicket-style ticket create.
     // (Tier2's "Ticket System API endpoint" host may point at any path.)
     if (request.method === "POST") {
@@ -80,12 +85,9 @@ export default {
 
 async function handleTicketCreate(request: Request, env: Env): Promise<Response> {
   // 1. IP allowlist (Tier2's two fixed source IPs).
-  if (env.ENFORCE_IP_ALLOWLIST === "true") {
-    const ip = request.headers.get("CF-Connecting-IP") ?? "";
-    if (!TIER2_SOURCE_IPS.has(ip)) {
-      console.warn("rejected ticket create: source IP not allowlisted");
-      return textResponse(403, "forbidden");
-    }
+  if (!ipAllowed(request, env)) {
+    console.warn("rejected ticket create: source IP not allowlisted");
+    return textResponse(403, "forbidden");
   }
 
   // 2. Shared-secret gate (the "API key" Tier2 sends).

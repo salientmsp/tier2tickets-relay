@@ -11,3 +11,9 @@ EXPECTED_KEY="a-long-random-shared-secret"
 
 # Gates POST /admin/sync (sent as X-Admin-Key, X-API-Key, or Authorization: Bearer).
 ADMIN_KEY="another-long-random-secret"
+
+# Optional: Halo mock OAuth credentials. If both are set, the /auth/token endpoint
+# validates the client_id/client_secret Tier2 sends; otherwise any creds are accepted
+# (requests are still IP-gated). Set the same values in the Tier2 Halo integration.
+HALO_CLIENT_ID="halo-mock-client-id"
+HALO_CLIENT_SECRET="halo-mock-client-secret"

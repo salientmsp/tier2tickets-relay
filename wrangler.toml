@@ -56,6 +56,8 @@ CATCHALL_CLIENT_ID = "15567"
 #   wrangler secret put GORELO_API_KEY   # X-API-Key for Gorelo (ticket write + asset/contact/client read scopes)
 #   wrangler secret put EXPECTED_KEY     # the "API key" Tier2 sends us in X-API-Key (gates ticket creation)
 #   wrangler secret put ADMIN_KEY        # gates POST /admin/sync (X-Admin-Key / X-API-Key / Authorization: Bearer)
+#   wrangler secret put HALO_CLIENT_ID   # optional: Halo mock OAuth client_id  (validated if both are set)
+#   wrangler secret put HALO_CLIENT_SECRET # optional: Halo mock OAuth client_secret
 
 # --- D1 ---
 # Create once:  wrangler d1 create tier2tickets-relay

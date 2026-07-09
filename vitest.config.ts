@@ -20,6 +20,8 @@ export default defineConfig({
           GORELO_API_KEY: "test-gorelo-key",
           EXPECTED_KEY: "test-expected-key",
           ADMIN_KEY: "test-admin-key",
+          HALO_CLIENT_ID: "halo-test-id",
+          HALO_CLIENT_SECRET: "halo-test-secret",
         },
       },
     }),
