@@ -134,8 +134,13 @@ async function handleTicketCreate(request: Request, env: Env): Promise<Response>
       return textResponse(502, "created but could not read ticket number");
     }
 
-    // osTicket-style success: 201 + ticket number as plain text.
-    return textResponse(201, ticketNumber);
+    // osTicket-style success: 201 + ticket id as plain text.
+    // Gorelo returns a hyphenated UUID; osTicket ticket numbers are alphanumeric
+    // with NO hyphens, and Tier2 rejects a hyphenated id ("Invalid Response").
+    // Strip hyphens so the id looks like an osTicket ticket number (still unique,
+    // and reversible back to the Gorelo UUID by re-inserting the 8-4-4-4-12 dashes).
+    const osTicketId = ticketNumber.replace(/-/g, "");
+    return textResponse(201, osTicketId);
   } catch (err) {
     if (err instanceof GoreloError) {
       console.error(`gorelo failure status=${err.status}`, err.body);
