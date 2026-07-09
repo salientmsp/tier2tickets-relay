@@ -12,6 +12,32 @@ const TIER2_SOURCE_IPS = new Set(["34.202.14.153", "3.209.57.193"]);
 const textResponse = (status: number, body: string): Response =>
   new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
 
+/**
+ * Mirror osTicket's successful-create response as closely as possible: HTTP 201,
+ * the ticket number as the body, and Content-Type: text/html; charset=UTF-8
+ * (osTicket's Http::response default). Tier2's osTicket client was built for this.
+ */
+const osTicketSuccess = (ticketNumber: string): Response =>
+  new Response(ticketNumber, {
+    status: 201,
+    headers: { "content-type": "text/html; charset=UTF-8" },
+  });
+
+/**
+ * osTicket's default ticket number is numeric, and Tier2 parses the returned
+ * body as a number. Gorelo returns a UUID with no numeric equivalent, so derive
+ * a stable numeric id from it: the first 8 hex digits -> a <=10-digit decimal
+ * (osTicket-like length, fits typical ticket-number field sizes). Deterministic
+ * per ticket; collisions are negligible at helpdesk volume. If the id is already
+ * numeric (future-proofing), it's passed through unchanged.
+ */
+export function toOsTicketNumber(id: string): string {
+  if (/^\d+$/.test(id)) return id;
+  const hex = id.replace(/[^0-9a-fA-F]/g, "").slice(0, 8);
+  const n = Number.parseInt(hex || "0", 16);
+  return String(Number.isFinite(n) ? n : 0);
+}
+
 export default {
   async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -134,13 +160,15 @@ async function handleTicketCreate(request: Request, env: Env): Promise<Response>
       return textResponse(502, "created but could not read ticket number");
     }
 
-    // osTicket-style success: 201 + ticket id as plain text.
-    // Gorelo returns a hyphenated UUID; osTicket ticket numbers are alphanumeric
-    // with NO hyphens, and Tier2 rejects a hyphenated id ("Invalid Response").
-    // Strip hyphens so the id looks like an osTicket ticket number (still unique,
-    // and reversible back to the Gorelo UUID by re-inserting the 8-4-4-4-12 dashes).
-    const osTicketId = ticketNumber.replace(/-/g, "");
-    return textResponse(201, osTicketId);
+    // osTicket-style success. Real osTicket returns HTTP 201 with the ticket
+    // NUMBER as the body and Content-Type: text/html — and its default ticket
+    // number is numeric. Tier2's client is built for that, so it parses the body
+    // as a number; a UUID/hex string fails ("error reading the response").
+    // Gorelo exposes no numeric ticket number, so derive a stable numeric id from
+    // the returned UUID. The raw UUID is logged above for traceability.
+    const osTicketNumber = toOsTicketNumber(ticketNumber);
+    console.log(`returning osTicket number ${osTicketNumber} for gorelo ticket ${ticketNumber}`);
+    return osTicketSuccess(osTicketNumber);
   } catch (err) {
     if (err instanceof GoreloError) {
       console.error(`gorelo failure status=${err.status}`, err.body);

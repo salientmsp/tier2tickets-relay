@@ -177,9 +177,20 @@ A snapshot of the live spec is captured at [`docs/gorelo-swagger.v1.json`](docs/
   is a uuid. Handled as-is.
 - ✅ **`POST /v1/tickets` response shape** — confirmed `CreatePublicTicketResult =
   { "ticketId": "<uuid>" }`. There is **no** human ticket-number field and **no**
-  GET-ticket/list-tickets endpoint, so the 201 body we return to Tier2 is the
-  ticket **uuid**. That's fine for the Integration Test (it just needs a non-empty
-  201 body); `extractTicketNumber` reads `ticketId` first.
+  GET-ticket/list-tickets endpoint. `extractTicketNumber` reads `ticketId` first.
+
+### Response we return to Tier2 (osTicket contract)
+
+Tier2's client is built for **real osTicket**, whose successful-create response is
+`HTTP 201`, `Content-Type: text/html`, body = the ticket **number** (numeric by
+default). We mirror that: `osTicketSuccess()` returns 201 + `text/html`, and
+`toOsTicketNumber()` derives a **stable numeric** id from Gorelo's UUID (first 8
+hex → a ≤10-digit decimal), because Gorelo exposes no numeric ticket number and
+Tier2 parses the body as a number (a UUID/hex string triggers Tier2's
+"error reading the response" / "Invalid Response from Ticket System"). The raw
+Gorelo UUID is logged on every create for traceability. **Caveat:** the number
+Tier2 shows is a derived reference, not Gorelo's own ticket number (the API can't
+provide one).
 - ✅ **`GET /v1/assets/agents` pagination** — confirmed a bare array, no query
   params / pagination. Single call fetches the whole fleet.
 - ✅ **Dispatcher Rule syntax** — confirmed Dispatcher Rules are sandboxed
