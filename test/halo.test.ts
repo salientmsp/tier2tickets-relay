@@ -180,12 +180,19 @@ describe("Halo lookups (Gorelo-backed)", () => {
 
 // A minimal Tier2 "Report Summary" table (the real payload embeds the reporter
 // identity here, not in the Halo user_id, which is the catch-all).
-const reportHtml = (opts: { email?: string; host?: string; name?: string; company?: string }): string =>
+const reportHtml = (opts: {
+  email?: string;
+  host?: string;
+  name?: string;
+  company?: string;
+  selections?: string;
+}): string =>
   `<table><tbody>
      <tr><td style="font-weight:600;">Name:</td><td>${opts.name ?? "Eli Brody"}</td></tr>
      ${opts.email ? `<tr><td style="font-weight:600;">Email:</td><td>${opts.email}</td></tr>` : ""}
      ${opts.company ? `<tr><td style="font-weight:600;">Business Name:</td><td>${opts.company}</td></tr>` : ""}
      ${opts.host ? `<tr><td style="font-weight:600;">Hostname:</td><td>${opts.host}</td></tr>` : ""}
+     ${opts.selections ? `<tr><td style="font-weight:600;">Selections:</td><td>${opts.selections}</td></tr>` : ""}
    </tbody></table>`;
 
 /** Capture the single Gorelo create call (returns a fixed ticket uuid). */
@@ -264,8 +271,8 @@ describe("Halo deferred ticket create (/tickets queues, /actions creates)", () =
     const desc = String(posted?.description);
     // The report is flattened into the body (reporter email + hostname survive).
     expect(desc).toContain("user@corp.com");
-    // The routing trail records the outcome, incl. the linked asset.
-    expect(desc).toContain("Client: 10  Contact: 55  Asset: pc-01 (linked)");
+    // The routing trail records the outcome, incl. location + the linked asset.
+    expect(desc).toContain("Client: 10  Contact: 55  Location: 100  Asset: pc-01 (linked)");
     // The notification note is NOT dumped into the body.
     expect(desc).not.toContain("@font-face");
     // the pending row is consumed
@@ -304,6 +311,83 @@ describe("Halo deferred ticket create (/tickets queues, /actions creates)", () =
     expect(desc).toContain("Connect to Computer: https://portal.helpdeskbuttons.com/c/abc");
     // The font-CSS boilerplate is still not dumped.
     expect(desc).not.toContain("@font-face");
+  });
+
+  it("trims default selections, dropping the label when only defaults were chosen", async () => {
+    const cap = captureGoreloCreate();
+    const created = await req("/tickets", {
+      method: "POST",
+      headers: { "content-type": "application/json", "halo-app-name": "tier2tech" },
+      body: JSON.stringify([
+        {
+          summary: "Test",
+          details_html: reportHtml({
+            email: "user@corp.com",
+            selections: "Connect directly to my computer as soon as available This affects only me",
+          }),
+        },
+      ]),
+    });
+    const haloId = ((await created.json()) as { id: number }).id;
+    await req("/actions", {
+      method: "POST",
+      headers: { "content-type": "application/json", "halo-app-name": "tier2tech" },
+      body: JSON.stringify([{ ticket_id: haloId, note_html: "x" }]),
+    });
+    const desc = String(cap.posted()?.description);
+    expect(desc).not.toContain("This affects only me");
+    expect(desc).not.toContain("Connect directly to my computer");
+    expect(desc).not.toContain("Selections:"); // label dropped — nothing non-default left
+  });
+
+  it("keeps Selections when a non-default item is chosen, minus the defaults", async () => {
+    const cap = captureGoreloCreate();
+    const created = await req("/tickets", {
+      method: "POST",
+      headers: { "content-type": "application/json", "halo-app-name": "tier2tech" },
+      body: JSON.stringify([
+        {
+          summary: "Test",
+          details_html: reportHtml({
+            email: "user@corp.com",
+            selections: "This is an emergency Connect directly to my computer as soon as available This affects only me",
+          }),
+        },
+      ]),
+    });
+    const haloId = ((await created.json()) as { id: number }).id;
+    await req("/actions", {
+      method: "POST",
+      headers: { "content-type": "application/json", "halo-app-name": "tier2tech" },
+      body: JSON.stringify([{ ticket_id: haloId, note_html: "x" }]),
+    });
+    const desc = String(cap.posted()?.description);
+    expect(desc).toContain("Selections: This is an emergency");
+    expect(desc).not.toContain("This affects only me");
+  });
+
+  it("routes client + location from the asset object Tier2 sends (site_id 0 fallback)", async () => {
+    const cap = captureGoreloCreate();
+    const created = await req("/tickets", {
+      method: "POST",
+      headers: { "content-type": "application/json", "halo-app-name": "tier2tech" },
+      body: JSON.stringify([
+        {
+          summary: "Test",
+          details_html: reportHtml({ host: "sph-chile-005" }), // hostname not in the mirror
+          site_id: 0, // Tier2 sends no site...
+          assets: [{ id: ASSET_NUM, client_id: 10, site_id: 100 }], // ...but the asset carries one
+        },
+      ]),
+    });
+    const haloId = ((await created.json()) as { id: number }).id;
+    await req("/actions", {
+      method: "POST",
+      headers: { "content-type": "application/json", "halo-app-name": "tier2tech" },
+      body: JSON.stringify([{ ticket_id: haloId, note_html: "x" }]),
+    });
+    // Client + location recovered from the asset; the asset itself is linked.
+    expect(cap.posted()).toMatchObject({ clientId: 10, locationId: 100, agentAssetIds: [AGENT_UUID] });
   });
 
   it("correlates the note by the ticket number in its text when no explicit id is sent", async () => {

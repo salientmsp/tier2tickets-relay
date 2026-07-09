@@ -436,6 +436,16 @@ async function resolveAssetUuids(db: D1Database, t: HaloTicket): Promise<string[
   return uuids;
 }
 
+/** The client/site the first asset object carries (Tier2 includes these on the create). */
+function firstAssetRouting(t: HaloTicket): { clientId: number | null; siteId: number | null } {
+  const a = Array.isArray(t.assets) ? t.assets[0] : t.assets;
+  if (a && typeof a === "object") {
+    const o = a as Record<string, unknown>;
+    return { clientId: num(o.client_id), siteId: num(o.site_id) };
+  }
+  return { clientId: null, siteId: null };
+}
+
 /** Resolved Gorelo routing for a press. */
 interface Routing {
   clientId: number;
@@ -477,17 +487,25 @@ async function resolveRouting(env: Env, t: HaloTicket): Promise<Routing> {
     }
   }
 
+  // The asset object Tier2 sends on the create carries its own client_id/site_id
+  // (its Gorelo location) — a good location source when Tier2's own site_id is 0.
+  const asset = firstAssetRouting(t);
+
   const bodyClient = num(t.client_id);
   const isCatchall = bodyClient === Number(env.CATCHALL_CLIENT_ID);
-  // Most specific signal wins: matched contact, matched device, a NON-catch-all
-  // client Tier2 sent, then whatever remains (catch-all).
+  // Most specific signal wins: matched contact, matched device, the asset's own
+  // client, a NON-catch-all client Tier2 sent, then whatever remains (catch-all).
   const clientId =
     contact?.client_id ??
     device?.client_id ??
+    asset.clientId ??
     (bodyClient && !isCatchall ? bodyClient : null) ??
     bodyClient ??
     Number(env.CATCHALL_CLIENT_ID);
-  const locationId = contact?.location_id ?? device?.location_id ?? num(t.site_id) ?? null;
+  // Location from the contact, the matched device, or the asset's site (Tier2's own
+  // site_id is often 0). Asset location fills in the ticket's site when nothing else does.
+  const locationId =
+    contact?.location_id ?? device?.location_id ?? asset.siteId ?? num(t.site_id) ?? null;
   const contactId = contact?.id ?? null;
 
   const agentAssetIds = await resolveAssetUuids(env.DB, t);
@@ -497,7 +515,7 @@ async function resolveRouting(env: Env, t: HaloTicket): Promise<Routing> {
   console.log(
     `HALO routing: reportEmail=${email || "(none)"} hostname=${hostname || "(none)"} ` +
       `contact=${contactId ?? "MISS"} device=${device ? "hit" : "miss"} assets=${agentAssetIds.length} ` +
-      `-> client=${clientId} location=${locationId ?? "none"}`,
+      `-> client=${clientId} location=${locationId ?? "none"} (assetSite=${asset.siteId ?? "none"})`,
   );
   return {
     clientId,
@@ -520,9 +538,20 @@ function truncate(s: string, max = FIELD_MAX): string {
   return s.length > max ? `${s.slice(0, max)}… [truncated ${s.length - max} chars]` : s;
 }
 
-// Fields we already surface elsewhere (report body / dedicated handling), so they
-// don't need to appear again in the raw-fields dump.
-const DUMP_SKIP = new Set(["details_html", "details", "summary", "subject", "note_html", "note"]);
+// Fields we already surface elsewhere (report body, device line, routing trail, or
+// dedicated handling), so they don't need to appear again in the raw-fields dump.
+const DUMP_SKIP = new Set([
+  "details_html",
+  "details",
+  "summary",
+  "subject",
+  "note_html",
+  "note",
+  "user_id",
+  "client_id",
+  "site_id",
+  "assets",
+]);
 
 /** Dump every remaining top-level field Tier2 sent, so nothing is silently lost. */
 function dumpSubmittedFields(t: HaloTicket): string {
@@ -538,20 +567,36 @@ function dumpSubmittedFields(t: HaloTicket): string {
 /** One-line hardware summary from the matched Gorelo agent (blank if no match). */
 function deviceSection(d: DeviceFullRow | null): string {
   if (!d) return "";
-  const ips = [d.local_ip, d.public_ip].filter((s) => s && s.trim()).join(" / ");
   const parts = [
     d.display_name || d.hostname,
     d.os,
     d.serial ? `SN ${d.serial}` : "",
-    ips ? `IP ${ips}` : "",
+    d.local_ip && d.local_ip.trim() ? `Local IP ${d.local_ip}` : "",
+    d.public_ip && d.public_ip.trim() ? `Public IP ${d.public_ip}` : "",
   ].filter((s) => s && String(s).trim());
   return parts.length ? `— Device —\n${parts.join(" · ")}` : "";
+}
+
+// The always-on HDB selections — every press includes them, so they carry no
+// signal. Strip them from the report; keep "Selections:" only when a non-default
+// item remains. (Both "as soon as available" and "...as soon as possible" wordings.)
+const DEFAULT_SELECTION_RES = [
+  /Connect directly to my computer as soon as (?:available|possible)/gi,
+  /This affects only me/gi,
+];
+
+function trimDefaultSelections(text: string): string {
+  let out = text;
+  for (const re of DEFAULT_SELECTION_RES) out = out.replace(re, "");
+  // Drop a now-empty "Selections:" label (it's the last field in the report).
+  out = out.replace(/Selections:\s*$/i, "");
+  return out.replace(/[ \t]{2,}/g, " ").replace(/[ \t]+\n/g, "\n").trim();
 }
 
 /** Build the ticket body: the report + every submitted field + device details + routing. */
 function buildHaloDescription(t: HaloTicket, routing: Routing): string {
   const raw = str(t.details_html) || str(t.details) || str(t.summary);
-  const body = truncate(htmlToText(raw), BODY_MAX);
+  const body = truncate(trimDefaultSelections(htmlToText(raw)), BODY_MAX);
 
   // The report body already shows reporter/company/hostname, so keep the trail to
   // just the routing outcome (which Gorelo ids we matched, and the asset status).
@@ -562,7 +607,8 @@ function buildHaloDescription(t: HaloTicket, routing: Routing): string {
     : "none";
   const trail = [
     "— Helpdesk Buttons routing —",
-    `Client: ${routing.clientId}  Contact: ${routing.contactId ?? "none"}  Asset: ${assetStatus}`,
+    `Client: ${routing.clientId}  Contact: ${routing.contactId ?? "none"}  ` +
+      `Location: ${routing.locationId ?? "none"}  Asset: ${assetStatus}`,
   ].join("\n");
 
   return [body, dumpSubmittedFields(t), deviceSection(routing.device), trail]
