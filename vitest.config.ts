@@ -19,7 +19,6 @@ export default defineConfig({
           CATCHALL_CLIENT_ID: "999",
           HDB_TAG_ID: "31974",
           GORELO_API_KEY: "test-gorelo-key",
-          EXPECTED_KEY: "test-expected-key",
           ADMIN_KEY: "test-admin-key",
           HALO_CLIENT_ID: "halo-test-id",
           HALO_CLIENT_SECRET: "halo-test-secret",

@@ -19,7 +19,6 @@ export interface Env {
 
   // secrets (wrangler secret put ...)
   GORELO_API_KEY: string; // X-API-Key sent to Gorelo
-  EXPECTED_KEY: string; // the key Tier2 sends us (gates ticket creation)
   ADMIN_KEY: string; // gates POST /admin/sync
 
   // optional Halo mock OAuth credentials (Tier2's client_id/client_secret).
@@ -103,23 +102,4 @@ export interface PublicClientLocationResponse {
   id: number;
   name?: string | null;
   clientId?: number | null;
-}
-
-/** Normalized identity extracted from a Helpdesk Buttons press. */
-export interface PressIdentity {
-  email: string; // lowercased/trimmed
-  name: string;
-  host: string; // short hostname, lowercased (domain stripped)
-  mac: string;
-  ip: string;
-}
-
-export type MatchType = "hostname" | "upn" | "domain" | "catchall";
-
-/** Result of resolving a press to a Gorelo client. */
-export interface MatchResult {
-  clientId: number;
-  locationId: number | null;
-  agentId: string | null;
-  matchType: MatchType;
 }

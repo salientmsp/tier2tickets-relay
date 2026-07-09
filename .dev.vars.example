@@ -4,15 +4,10 @@
 # X-API-Key sent to Gorelo. Needs scopes: ticket write, asset/contact/client read.
 GORELO_API_KEY="your-gorelo-api-key"
 
-# The key Tier2 sends us in the X-API-Key header on each ticket POST. Pick any
-# strong random string and configure the same value in the Helpdesk Buttons
-# osTicket integration.
-EXPECTED_KEY="a-long-random-shared-secret"
-
 # Gates POST /admin/sync (sent as X-Admin-Key, X-API-Key, or Authorization: Bearer).
 ADMIN_KEY="another-long-random-secret"
 
-# Optional: Halo mock OAuth credentials. If both are set, the /auth/token endpoint
+# Optional: Halo mock OAuth credentials. If both are set, the /token endpoint
 # validates the client_id/client_secret Tier2 sends; otherwise any creds are accepted
 # (requests are still IP-gated). Set the same values in the Tier2 Halo integration.
 HALO_CLIENT_ID="halo-mock-client-id"

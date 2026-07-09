@@ -105,39 +105,6 @@ export async function initSchema(db: D1Database): Promise<void> {
   }
 }
 
-// --- Matcher lookups (osTicket path) ----------------------------------------
-
-export interface DeviceRow {
-  client_id: number;
-  location_id: number | null;
-  agent_id: string | null;
-}
-
-export async function findDeviceByHostname(db: D1Database, host: string): Promise<DeviceRow | null> {
-  if (!host) return null;
-  return db
-    .prepare(`SELECT client_id, location_id, agent_id FROM devices WHERE hostname = ? LIMIT 1`)
-    .bind(host)
-    .first<DeviceRow>();
-}
-
-export async function findDeviceByUpn(db: D1Database, upn: string): Promise<DeviceRow | null> {
-  if (!upn) return null;
-  return db
-    .prepare(`SELECT client_id, location_id, agent_id FROM devices WHERE upn = ? LIMIT 1`)
-    .bind(upn)
-    .first<DeviceRow>();
-}
-
-export async function findClientByDomain(db: D1Database, domain: string): Promise<number | null> {
-  if (!domain) return null;
-  const row = await db
-    .prepare(`SELECT client_id FROM client_domains WHERE domain = ? LIMIT 1`)
-    .bind(domain)
-    .first<{ client_id: number }>();
-  return row ? row.client_id : null;
-}
-
 // --- Halo mock lookups ------------------------------------------------------
 
 export interface ClientRow {

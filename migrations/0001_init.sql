@@ -2,7 +2,7 @@
 -- The Worker also self-creates + additively migrates this at runtime (src/db.ts
 -- initSchema), so applying this migration is optional but recommended for a fresh DB.
 
--- Agents/devices (osTicket matcher + Halo asset lookup + ticket enrichment).
+-- Agents/devices (Halo asset lookup + ticket enrichment).
 CREATE TABLE IF NOT EXISTS devices (
   hostname     TEXT,
   upn          TEXT,

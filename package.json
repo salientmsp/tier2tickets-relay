@@ -1,7 +1,7 @@
 {
   "name": "tier2tickets-relay",
   "version": "1.0.0",
-  "description": "Cloudflare Worker that impersonates an osTicket helpdesk so Tier2Tickets / Helpdesk Buttons can create tickets in Gorelo.",
+  "description": "Cloudflare Worker that impersonates a HaloPSA instance so Tier2Tickets / Helpdesk Buttons can create tickets in Gorelo.",
   "private": true,
   "type": "module",
   "scripts": {

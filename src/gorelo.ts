@@ -143,9 +143,9 @@ function asArray<T>(raw: unknown): T[] {
  * Extract the ticket identifier from a POST /v1/tickets response.
  * CONFIRMED (swagger CreatePublicTicketResult): the response is
  * `{ "ticketId": "<uuid>" }` — a GUID, not a human ticket number (Gorelo's
- * public API exposes no ticket-number field and no GET-ticket endpoint). We
- * return the ticketId as the osTicket-style body; Tier2 only needs a non-empty
- * 201 body. `ticketId` is checked first; the rest are defensive fallbacks.
+ * public API exposes no ticket-number field and no GET-ticket endpoint). The
+ * Halo mock uses this uuid to correlate the created ticket and log it.
+ * `ticketId` is checked first; the rest are defensive fallbacks.
  */
 export function extractTicketNumber(raw: unknown): string | null {
   if (raw == null) return null;
