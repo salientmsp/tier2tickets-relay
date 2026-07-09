@@ -624,9 +624,30 @@ function dot(parts: unknown[]): string {
     .map((s) => esc(s))
     .join(" · ");
 }
-/** Trim a Gorelo ISO timestamp to "YYYY-MM-DD HH:MM". */
-function shortTime(iso: string): string {
-  return iso ? iso.replace("T", " ").slice(0, 16) : "";
+/** A Gorelo ISO timestamp as a coarse relative age, e.g. "13 hours ago", "7 days ago". */
+function relativeTime(iso: string): string {
+  if (!iso) return "";
+  // Gorelo sends timezone-naive timestamps; treat them as UTC.
+  const hasTz = /[zZ]|[+-]\d\d:?\d\d$/.test(iso);
+  const t = Date.parse(hasTz ? iso : `${iso}Z`);
+  if (!Number.isFinite(t)) return "";
+  const diff = Date.now() - t;
+  const suffix = diff >= 0 ? "ago" : "from now";
+  const mins = Math.round(Math.abs(diff) / 60000);
+  if (mins < 1) return "just now";
+  const units: Array<[number, string]> = [
+    [60, "minute"],
+    [24, "hour"],
+    [30, "day"],
+    [12, "month"],
+    [Number.POSITIVE_INFINITY, "year"],
+  ];
+  let value = mins;
+  for (const [factor, name] of units) {
+    if (value < factor) return `${value} ${name}${value === 1 ? "" : "s"} ${suffix}`;
+    value = Math.round(value / factor);
+  }
+  return `${value} years ${suffix}`;
 }
 
 /**
@@ -644,7 +665,7 @@ function deviceSection(agent: PublicDeviceResponse | null, d: DeviceFullRow | nu
   const mem = nonEmpty(agent?.memory) ? `${nonEmpty(agent?.memory)} GB RAM` : "";
   const model = dot([agent?.manufacturer, agent?.model]);
   const lastUser = nonEmpty(agent?.lastLoggedOnUserUpn) || nonEmpty(agent?.lastLoggedOnUser);
-  const lastBoot = shortTime(nonEmpty(agent?.lastBootUpTime));
+  const lastBoot = relativeTime(nonEmpty(agent?.lastBootUpTime));
 
   const lines = [
     dot([name, os, agent?.osVersion]),
@@ -693,18 +714,8 @@ function buildHaloDescription(t: HaloTicket, routing: Routing): string {
   const dev = deviceSection(routing.agentDetail, routing.device);
   if (dev) sections.push(dev);
 
-  // Routing outcome.
-  const assetStatus = routing.hostname
-    ? routing.assetMatched
-      ? `${routing.hostname} (linked)`
-      : `${routing.hostname} (no Gorelo agent match)`
-    : "none";
-  sections.push(
-    `${heading("Helpdesk Buttons routing")}<br>Client: ${routing.clientId} · ` +
-      `Contact: ${routing.contactId ?? "none"} · Location: ${routing.locationId ?? "none"} · ` +
-      `Asset: ${esc(assetStatus)}`,
-  );
-
+  // (Routing outcome — client/contact/location/asset — is logged, not shown in the
+  // ticket; the asset is already attached as a real Gorelo asset.)
   return sections.join("<br><br>");
 }
 
@@ -833,7 +844,11 @@ async function handleActions(env: Env, body: string): Promise<Response> {
   // screenshots/diagnostics, Connect to Computer = remote session); those we DO
   // surface, since Gorelo has no attachment API and this is the only path to them.
   const cmd = JSON.parse(pending.command) as CreatePublicTicketCommand;
-  const links = extractNoteLinks(noteText);
+  // Keep the report link (screenshots/diag); drop the remote "Connect to Computer"
+  // link — techs connect from Gorelo, and it just clutters the ticket.
+  const links = extractNoteLinks(noteText).filter(
+    (l) => !/connect to computer/i.test(l.label) && !/\/connect\b/i.test(l.href),
+  );
   if (links.length) {
     const rendered = links
       .map((l) => `${esc(l.label)}: <a href="${esc(l.href)}">${esc(l.href)}</a>`)

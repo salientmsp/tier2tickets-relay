@@ -277,13 +277,11 @@ describe("Halo deferred ticket create (/tickets queues, /actions creates)", () =
     const desc = String(posted?.description);
     // The report fields are rendered into the HTML body (reporter email survives).
     expect(desc).toContain("user@corp.com");
-    // The routing trail records the outcome, incl. location + the linked asset.
-    expect(desc).toContain(
-      "Client: 10 · Contact: 55 · Location: 100 · Asset: pc-01 (linked)",
-    );
     // HTML formatting: section headers + line breaks.
     expect(desc).toContain("<b>Report Summary</b>");
     expect(desc).toContain("<br>");
+    // The routing detail is logged, not shown in the ticket.
+    expect(desc).not.toContain("Helpdesk Buttons routing");
     // The notification note is NOT dumped into the body.
     expect(desc).not.toContain("@font-face");
     // the pending row is consumed
@@ -320,8 +318,9 @@ describe("Halo deferred ticket create (/tickets queues, /actions creates)", () =
     const desc = String(cap.posted()?.description);
     expect(desc).toContain("View Report");
     expect(desc).toContain('<a href="https://portal.helpdeskbuttons.com/r/abc">');
-    expect(desc).toContain("Connect to Computer");
-    expect(desc).toContain('<a href="https://portal.helpdeskbuttons.com/c/abc">');
+    // The "Connect to Computer" remote link is dropped.
+    expect(desc).not.toContain("Connect to Computer");
+    expect(desc).not.toContain("/c/abc");
     // The font-CSS boilerplate is still not dumped.
     expect(desc).not.toContain("@font-face");
   });
@@ -399,7 +398,7 @@ describe("Halo deferred ticket create (/tickets queues, /actions creates)", () =
           localIPAddress: "10.100.1.13",
           publicIPAddress: "68.211.123.114",
           lastLoggedOnUserUpn: "cmaidan@sph.health",
-          lastBootUpTime: "2026-07-09T07:36:00",
+          lastBootUpTime: "2020-01-01T00:00:00", // long ago -> relative "years ago"
         }),
     });
     const created = await req("/tickets", {
@@ -420,7 +419,7 @@ describe("Halo deferred ticket create (/tickets queues, /actions creates)", () =
     expect(desc).toContain("32 GB RAM");
     expect(desc).toContain("SN SN-RICH");
     expect(desc).toContain("Last user cmaidan@sph.health");
-    expect(desc).toContain("Last boot 2026-07-09 07:36");
+    expect(desc).toMatch(/Last boot \d+ years? ago/);
   });
 
   it("routes client + location from the asset object Tier2 sends (site_id 0 fallback)", async () => {
