@@ -262,8 +262,12 @@ describe("Halo deferred ticket create (/tickets queues, /actions creates)", () =
       agentAssetIds: [AGENT_UUID],
     });
     const desc = String(posted?.description);
-    expect(desc).toContain("It won't print"); // the /actions note
-    expect(desc).toContain("Reporter: user@corp.com"); // the resolution trail
+    // The report is flattened into the body (reporter email + hostname survive).
+    expect(desc).toContain("user@corp.com");
+    // The routing trail records the outcome, incl. the linked asset.
+    expect(desc).toContain("Client: 10  Contact: 55  Asset: pc-01 (linked)");
+    // The notification note is NOT dumped into the body.
+    expect(desc).not.toContain("@font-face");
     // the pending row is consumed
     const row = await env.DB.prepare(`SELECT command FROM pending_tickets WHERE halo_id = ?`)
       .bind(haloId)

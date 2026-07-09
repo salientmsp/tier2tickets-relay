@@ -360,7 +360,17 @@ function decodeEntities(s: string): string {
     .replace(/&#39;|&apos;/gi, "'");
 }
 function htmlToText(s: string): string {
-  return decodeEntities(stripTags(s)).replace(/[ \t]+\n/g, "\n").replace(/[ \t]{2,}/g, " ").trim();
+  // Drop non-content blocks first — a full HTML email (the /actions note) carries
+  // <head>/<style> with @font-face/@media rules that otherwise flatten into noise.
+  const stripped = s
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<head[\s\S]*?<\/head>/gi, " ");
+  return decodeEntities(stripTags(stripped))
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
 }
 
 /** Extract the `<td>Label:</td><td>Value</td>` pairs from the report table. */
@@ -434,6 +444,8 @@ interface Routing {
   contactName: string;
   agentAssetIds: string[];
   email: string;
+  hostname: string;
+  assetMatched: boolean;
   report: Record<string, string>;
 }
 
@@ -451,9 +463,18 @@ async function resolveRouting(env: Env, t: HaloTicket): Promise<Routing> {
   if (!contact && email) contact = await findContactByEmail(env.DB, email);
 
   // Device by hostname (from the report) — an agent asset link plus a
-  // client/location fallback when the email didn't resolve a contact.
+  // client/location fallback when the email didn't resolve a contact. Tier2 looks
+  // the asset up separately but does NOT send it on create, so we re-resolve here.
+  // Exact hostname first, then the same fuzzy match the /asset lookup uses (the
+  // stored hostname can be a display-name/serial variant of what the report shows).
   let device: DeviceRow | null = null;
-  if (hostname) device = await findDeviceByHostname(env.DB, hostname);
+  if (hostname) {
+    device = await findDeviceByHostname(env.DB, hostname);
+    if (!device) {
+      const [row] = await searchDeviceRows(env.DB, hostname, undefined, 1);
+      if (row) device = { client_id: row.client_id ?? 0, location_id: row.location_id, agent_id: row.agent_id };
+    }
+  }
 
   const bodyClient = num(t.client_id);
   const isCatchall = bodyClient === Number(env.CATCHALL_CLIENT_ID);
@@ -474,9 +495,20 @@ async function resolveRouting(env: Env, t: HaloTicket): Promise<Routing> {
   const contactName = contact?.name || report.name || email || "Helpdesk Buttons";
   console.log(
     `HALO routing: reportEmail=${email || "(none)"} hostname=${hostname || "(none)"} ` +
-      `contact=${contactId ?? "MISS"} device=${device ? "hit" : "miss"} -> client=${clientId} location=${locationId ?? "none"}`,
+      `contact=${contactId ?? "MISS"} device=${device ? "hit" : "miss"} assets=${agentAssetIds.length} ` +
+      `-> client=${clientId} location=${locationId ?? "none"}`,
   );
-  return { clientId, locationId, contactId, contactName, agentAssetIds, email, report };
+  return {
+    clientId,
+    locationId,
+    contactId,
+    contactName,
+    agentAssetIds,
+    email,
+    hostname,
+    assetMatched: agentAssetIds.length > 0,
+    report,
+  };
 }
 
 const FIELD_MAX = 2000; // cap any single field so a base64 attachment can't bloat the ticket
@@ -485,20 +517,24 @@ function truncate(s: string): string {
   return s.length > FIELD_MAX ? `${s.slice(0, FIELD_MAX)}… [truncated ${s.length - FIELD_MAX} chars]` : s;
 }
 
-/** Build the ticket body: the report (HTML flattened to text) + resolution trail. */
+/** Build the ticket body: the report (HTML flattened to clean text) + a short routing trail. */
 function buildHaloDescription(t: HaloTicket, routing: Routing): string {
   const raw = str(t.details_html) || str(t.details) || str(t.summary);
   const body = truncate(htmlToText(raw));
 
-  const trail: string[] = [];
-  if (routing.email) trail.push(`Reporter: ${routing.email}`);
-  if (routing.report.name) trail.push(`Name: ${routing.report.name}`);
-  if (routing.report["business name"]) trail.push(`Company: ${routing.report["business name"]}`);
-  if (routing.report.hostname) trail.push(`Hostname: ${routing.report.hostname}`);
-  trail.push(`Routed to Gorelo client=${routing.clientId} contact=${routing.contactId ?? "none"}`);
+  // The report body already shows reporter/company/hostname, so keep the trail to
+  // just the routing outcome (which Gorelo ids we matched, and the asset status).
+  const assetStatus = routing.hostname
+    ? routing.assetMatched
+      ? `${routing.hostname} (linked)`
+      : `${routing.hostname} (no Gorelo agent match)`
+    : "none";
+  const trail = [
+    "— Helpdesk Buttons routing —",
+    `Client: ${routing.clientId}  Contact: ${routing.contactId ?? "none"}  Asset: ${assetStatus}`,
+  ].join("\n");
 
-  const footer = ["--- Helpdesk Buttons submission ---", ...trail].join("\n");
-  return [body, footer].filter((s) => s.length > 0).join("\n\n");
+  return [body, trail].filter((s) => s.length > 0).join("\n\n");
 }
 
 function buildTicketCommand(env: Env, t: HaloTicket, routing: Routing): CreatePublicTicketCommand {
@@ -599,9 +635,10 @@ async function handleActions(env: Env, body: string): Promise<Response> {
     return jsonResponse(201, [{ id: actionId, ticket_id: haloId }]);
   }
 
+  // The /actions note is Tier2's notification email — fully redundant with the
+  // report already in the ticket body, and its <head>/<style> flatten into noise.
+  // So we DON'T append it; the note's only job here was to trigger the create.
   const cmd = JSON.parse(pending.command) as CreatePublicTicketCommand;
-  const noteBody = truncate(htmlToText(noteText));
-  if (noteBody) cmd.description = `${cmd.description}\n\n--- Follow-up note (Helpdesk Buttons) ---\n${noteBody}`;
 
   try {
     const raw = await new GoreloClient(env).createTicket(cmd);
