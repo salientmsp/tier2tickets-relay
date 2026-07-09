@@ -57,10 +57,10 @@ async function seed(): Promise<void> {
       .bind(55, "user@corp.com", "Jane Doe", 10, 100),
     env.DB
       .prepare(
-        `INSERT INTO devices (hostname, upn, client_id, location_id, agent_id, asset_num, display_name, serial, local_ip, public_ip, os)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO devices (hostname, client_id, location_id, agent_id, asset_num, display_name, serial, local_ip, public_ip, os)
+         VALUES (?,?,?,?,?,?,?,?,?,?)`,
       )
-      .bind("pc-01", "user@corp.com", 10, 100, AGENT_UUID, ASSET_NUM, "PC-01", "SN1", "10.0.0.5", "", ""),
+      .bind("pc-01", 10, 100, AGENT_UUID, ASSET_NUM, "PC-01", "SN1", "10.0.0.5", "", ""),
     env.DB.prepare(`INSERT INTO sync_meta (key, value) VALUES ('last_sync', '2026-01-01T00:00:00Z')`),
   ]);
 }
@@ -420,6 +420,78 @@ describe("Halo deferred ticket create (/tickets queues, /actions creates)", () =
     expect(desc).toContain("SN SN-RICH");
     expect(desc).toContain("Last user cmaidan@sph.health");
     expect(desc).toMatch(/Last boot \d+ years? ago/);
+  });
+
+  it("bumps priority to EMERGENCY_PRIORITY when the press is flagged an emergency", async () => {
+    const cap = captureGoreloCreate();
+    const created = await req("/tickets", {
+      method: "POST",
+      headers: { "content-type": "application/json", "halo-app-name": "tier2tech" },
+      body: JSON.stringify([
+        { summary: "Test", details_html: reportHtml({ email: "user@corp.com", selections: "This is an emergency" }) },
+      ]),
+    });
+    const haloId = ((await created.json()) as { id: number }).id;
+    await req("/actions", {
+      method: "POST",
+      headers: { "content-type": "application/json", "halo-app-name": "tier2tech" },
+      body: JSON.stringify([{ ticket_id: haloId, note_html: "x" }]),
+    });
+    expect(cap.posted()).toMatchObject({ priorityId: 1 }); // EMERGENCY_PRIORITY
+  });
+
+  it("uses DEFAULT_PRIORITY for a non-emergency press", async () => {
+    const cap = captureGoreloCreate();
+    const created = await req("/tickets", {
+      method: "POST",
+      headers: { "content-type": "application/json", "halo-app-name": "tier2tech" },
+      body: JSON.stringify([{ summary: "Test", details_html: reportHtml({ email: "user@corp.com" }) }]),
+    });
+    const haloId = ((await created.json()) as { id: number }).id;
+    await req("/actions", {
+      method: "POST",
+      headers: { "content-type": "application/json", "halo-app-name": "tier2tech" },
+      body: JSON.stringify([{ ticket_id: haloId, note_html: "x" }]),
+    });
+    expect(cap.posted()).toMatchObject({ priorityId: 2 }); // DEFAULT_PRIORITY
+  });
+
+  it("dead-letters a queued ticket after MAX_PENDING_ATTEMPTS failed creates", async () => {
+    // Gorelo create keeps failing.
+    routes.push({
+      method: "POST",
+      match: (u) => u.pathname === "/v1/tickets",
+      handler: () => json(500, { error: "boom" }),
+    });
+    // A stale pending row already at attempt 4 -> the next failure is attempt 5 = give up.
+    const cmd = { title: "Doomed", clientId: 10, statusId: 1, groupId: 7, typeId: 3, priorityId: 2, sourceId: 6, agentAssetIds: [] };
+    await env.DB.prepare(`INSERT INTO pending_tickets (halo_id, command, created_at, attempts) VALUES (?,?,?,?)`)
+      .bind(9999, JSON.stringify(cmd), "2000-01-01T00:00:00Z", 4)
+      .run();
+
+    const n = await flushPendingTickets(env);
+    expect(n).toBe(0);
+    // Dropped, not re-queued.
+    const row = await env.DB.prepare(`SELECT halo_id FROM pending_tickets WHERE halo_id = 9999`).first();
+    expect(row).toBeNull();
+  });
+
+  it("re-queues with an incremented attempt when a create fails below the cap", async () => {
+    routes.push({
+      method: "POST",
+      match: (u) => u.pathname === "/v1/tickets",
+      handler: () => json(500, { error: "boom" }),
+    });
+    const cmd = { title: "Retry", clientId: 10, statusId: 1, groupId: 7, typeId: 3, priorityId: 2, sourceId: 6, agentAssetIds: [] };
+    await env.DB.prepare(`INSERT INTO pending_tickets (halo_id, command, created_at, attempts) VALUES (?,?,?,?)`)
+      .bind(8888, JSON.stringify(cmd), "2000-01-01T00:00:00Z", 1)
+      .run();
+
+    await flushPendingTickets(env);
+    const row = await env.DB.prepare(`SELECT attempts FROM pending_tickets WHERE halo_id = 8888`).first<{
+      attempts: number;
+    }>();
+    expect(row?.attempts).toBe(2);
   });
 
   it("routes client + location from the asset object Tier2 sends (site_id 0 fallback)", async () => {

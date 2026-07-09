@@ -22,7 +22,7 @@ export default {
         const r = await syncAll(env);
         return textResponse(
           200,
-          `ok clients=${r.clients} domains=${r.domains} locations=${r.locations} contacts=${r.contacts} devices=${r.devices}`,
+          `ok clients=${r.clients} locations=${r.locations} contacts=${r.contacts} devices=${r.devices}`,
         );
       } catch (err) {
         console.error("admin sync failed", describeError(err));
@@ -53,7 +53,7 @@ export default {
         syncAll(env)
           .then((r) =>
             console.log(
-              `cron sync ok clients=${r.clients} domains=${r.domains} locations=${r.locations} contacts=${r.contacts} devices=${r.devices}`,
+              `cron sync ok clients=${r.clients} locations=${r.locations} contacts=${r.contacts} devices=${r.devices}`,
             ),
           )
           .catch((err) => console.error("cron sync failed", describeError(err))),

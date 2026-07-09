@@ -107,6 +107,11 @@ const jsonResponse = (status: number, body: unknown): Response =>
     headers: { "content-type": "application/json; charset=utf-8" },
   });
 
+// Verbose logging (full request/response bodies) carries PII/PHI — the report
+// includes names, emails, phones — so it's OFF unless DEBUG_LOGS is enabled.
+// Operational logs (ids only, errors) are always emitted.
+const debugOn = (env: Env): boolean => /^(1|true|yes|on)$/i.test(env.DEBUG_LOGS ?? "");
+
 function safeHeaders(request: Request): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of request.headers.entries()) {
@@ -116,7 +121,8 @@ function safeHeaders(request: Request): Record<string, string> {
   return out;
 }
 
-async function logCapture(request: Request, url: URL): Promise<string> {
+/** Read the request body (always) and, only when DEBUG_LOGS is on, log the full capture. */
+async function logCapture(request: Request, url: URL, env: Env): Promise<string> {
   let body = "";
   try {
     // Decode via arrayBuffer (works for JSON + form bodies without the workerd
@@ -126,11 +132,16 @@ async function logCapture(request: Request, url: URL): Promise<string> {
   } catch {
     body = "<unreadable>";
   }
-  const redacted = body.replace(/(client_secret|password|secret)=([^&\s]+)/gi, "$1=<redacted>");
-  console.log(
-    `HALO CAPTURE ${request.method} ${url.pathname}${url.search} ` +
-      `headers=${JSON.stringify(safeHeaders(request))} body=${redacted.slice(0, 2000)}`,
-  );
+  if (debugOn(env)) {
+    const redacted = body.replace(/(client_secret|password|secret)=([^&\s]+)/gi, "$1=<redacted>");
+    console.log(
+      `HALO CAPTURE ${request.method} ${url.pathname}${url.search} ` +
+        `headers=${JSON.stringify(safeHeaders(request))} body=${redacted.slice(0, 2000)}`,
+    );
+  } else {
+    // Non-PII breadcrumb: method + path only (search params can carry emails).
+    console.log(`HALO ${request.method} ${url.pathname}`);
+  }
   return body;
 }
 
@@ -157,7 +168,9 @@ async function handleToken(request: Request, env: Env, url: URL, body: string): 
   const params = await parseKeyValues(body, ct);
   const clientId = params.client_id ?? "";
   const tenant = params.tenant ?? url.searchParams.get("tenant") ?? "";
-  console.log(`HALO token grant=${params.grant_type ?? ""} tenant=${tenant} client_id=${clientId}`);
+  if (debugOn(env)) {
+    console.log(`HALO token grant=${params.grant_type ?? ""} tenant=${tenant} client_id=${clientId}`);
+  }
 
   if (env.HALO_CLIENT_ID && env.HALO_CLIENT_SECRET) {
     if (clientId !== env.HALO_CLIENT_ID || params.client_secret !== env.HALO_CLIENT_SECRET) {
@@ -339,6 +352,9 @@ const num = (v: unknown): number | null => {
 // /actions note before the cron orphan-flush creates it note-less. Tier2 posts
 // the action ~1s after the ticket, so this is a generous safety margin.
 const PENDING_GRACE_MS = 5 * 60 * 1000;
+// Give up on a queued ticket after this many failed Gorelo create attempts, so a
+// permanently-rejected command can't be retried forever (dead-letter -> logged + dropped).
+const MAX_PENDING_ATTEMPTS = 5;
 
 const nowIso = (): string => new Date().toISOString();
 
@@ -457,6 +473,7 @@ interface Routing {
   email: string;
   hostname: string;
   assetMatched: boolean;
+  isEmergency: boolean;
   device: DeviceFullRow | null;
   agentDetail: PublicDeviceResponse | null;
   report: Record<string, string>;
@@ -518,11 +535,18 @@ async function resolveRouting(env: Env, t: HaloTicket): Promise<Routing> {
   const agentDetail = device?.agent_id ? await new GoreloClient(env).getAgent(device.agent_id) : null;
 
   const contactName = contact?.name || report.name || email || "Helpdesk Buttons";
+  // A press flagged as an emergency bumps the ticket priority.
+  const isEmergency = /this is an emergency/i.test(html);
+
+  // Operational routing log — no raw email (PII); the email is logged only under DEBUG_LOGS.
   console.log(
-    `HALO routing: reportEmail=${email || "(none)"} hostname=${hostname || "(none)"} ` +
+    `HALO routing: emailMatch=${email ? "y" : "n"} hostname=${hostname || "(none)"} ` +
       `contact=${contactId ?? "MISS"} device=${device ? "hit" : "miss"} assets=${agentAssetIds.length} ` +
-      `-> client=${clientId} location=${locationId ?? "none"} (assetSite=${asset.siteId ?? "none"})`,
+      `emergency=${isEmergency ? "y" : "n"} -> client=${clientId} location=${locationId ?? "none"} ` +
+      `(assetSite=${asset.siteId ?? "none"})`,
   );
+  if (email && debugOn(env)) console.log(`HALO routing email=${email}`);
+
   return {
     clientId,
     locationId,
@@ -532,6 +556,7 @@ async function resolveRouting(env: Env, t: HaloTicket): Promise<Routing> {
     email,
     hostname,
     assetMatched: agentAssetIds.length > 0,
+    isEmergency,
     device,
     agentDetail,
     report,
@@ -624,12 +649,49 @@ function dot(parts: unknown[]): string {
     .map((s) => esc(s))
     .join(" · ");
 }
-/** A Gorelo ISO timestamp as a coarse relative age, e.g. "13 hours ago", "7 days ago". */
-function relativeTime(iso: string): string {
+/** Offset (ms) of an IANA time zone from UTC at a given instant. */
+function tzOffsetMs(instant: number, tz: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(new Date(instant));
+  const f: Record<string, number> = {};
+  for (const p of parts) if (p.type !== "literal") f[p.type] = Number(p.value);
+  const asUtc = Date.UTC(f.year!, (f.month ?? 1) - 1, f.day!, f.hour ?? 0, f.minute ?? 0, f.second ?? 0);
+  return asUtc - instant;
+}
+
+/**
+ * A Gorelo ISO timestamp as a coarse relative age, e.g. "13 hours ago", "7 days ago".
+ * Gorelo sends timezone-naive timestamps that are wall-clock in the agent's `tz`; if a
+ * tz is given we resolve the real instant through it, else we fall back to UTC.
+ */
+function relativeTime(iso: string, tz?: string | null): string {
   if (!iso) return "";
-  // Gorelo sends timezone-naive timestamps; treat them as UTC.
   const hasTz = /[zZ]|[+-]\d\d:?\d\d$/.test(iso);
-  const t = Date.parse(hasTz ? iso : `${iso}Z`);
+  let t: number;
+  if (hasTz) {
+    t = Date.parse(iso);
+  } else {
+    const asUtc = Date.parse(`${iso}Z`); // wall time read as if UTC
+    if (!Number.isFinite(asUtc)) return "";
+    // Subtract the zone's offset at that wall time to get the true instant.
+    let offset = 0;
+    if (tz) {
+      try {
+        offset = tzOffsetMs(asUtc, tz);
+      } catch {
+        offset = 0; // unknown zone — treat as UTC
+      }
+    }
+    t = asUtc - offset;
+  }
   if (!Number.isFinite(t)) return "";
   const diff = Date.now() - t;
   const suffix = diff >= 0 ? "ago" : "from now";
@@ -665,7 +727,7 @@ function deviceSection(agent: PublicDeviceResponse | null, d: DeviceFullRow | nu
   const mem = nonEmpty(agent?.memory) ? `${nonEmpty(agent?.memory)} GB RAM` : "";
   const model = dot([agent?.manufacturer, agent?.model]);
   const lastUser = nonEmpty(agent?.lastLoggedOnUserUpn) || nonEmpty(agent?.lastLoggedOnUser);
-  const lastBoot = relativeTime(nonEmpty(agent?.lastBootUpTime));
+  const lastBoot = relativeTime(nonEmpty(agent?.lastBootUpTime), agent?.timeZone);
 
   const lines = [
     dot([name, os, agent?.osVersion]),
@@ -743,6 +805,9 @@ function extractNoteLinks(html: string): Array<{ label: string; href: string }> 
 function buildTicketCommand(env: Env, t: HaloTicket, routing: Routing): CreatePublicTicketCommand {
   const summary = str(t.summary) || str(t.subject) || "(no subject)";
   const tagId = num(env.HDB_TAG_ID);
+  // "This is an emergency" bumps the priority (when EMERGENCY_PRIORITY is set).
+  const emergencyId = num(env.EMERGENCY_PRIORITY);
+  const priorityId = (routing.isEmergency && emergencyId ? emergencyId : Number(env.DEFAULT_PRIORITY)) as PublicTicketPriority;
   return {
     title: summary,
     createdByName: routing.contactName,
@@ -753,7 +818,7 @@ function buildTicketCommand(env: Env, t: HaloTicket, routing: Routing): CreatePu
     statusId: Number(env.DEFAULT_STATUS_ID),
     groupId: Number(env.DEFAULT_GROUP_ID),
     typeId: Number(env.DEFAULT_TYPE_ID),
-    priorityId: Number(env.DEFAULT_PRIORITY) as PublicTicketPriority,
+    priorityId,
     sourceId: Number(env.DEFAULT_SOURCE) as TicketSource,
     tagIds: tagId ? [tagId] : undefined,
     agentAssetIds: routing.agentAssetIds,
@@ -865,8 +930,14 @@ async function handleActions(env: Env, body: string): Promise<Response> {
     );
     return jsonResponse(201, [{ id: actionId, ticket_id: haloId, gorelo_ticket_id: uuid }]);
   } catch (err) {
-    // Re-queue so the orphan flush retries; surface the failure to Tier2.
-    await putPendingTicket(env.DB, haloId, JSON.stringify(cmd), pending.created_at);
+    // Re-queue so the orphan flush retries — unless we've exhausted attempts, in
+    // which case dead-letter it (drop + log) so a bad command can't loop forever.
+    const attempts = pending.attempts + 1;
+    if (attempts >= MAX_PENDING_ATTEMPTS) {
+      console.error(`HALO dead-letter halo_id=${haloId} after ${attempts} attempts: ${String(err)}`);
+    } else {
+      await putPendingTicket(env.DB, haloId, JSON.stringify(cmd), pending.created_at, attempts);
+    }
     if (err instanceof GoreloError) {
       console.error(`HALO action gorelo create rejected status=${err.status} response=${err.body}`);
       return jsonResponse(502, { error: "gorelo_create_failed", status: err.status });
@@ -893,8 +964,13 @@ export async function flushPendingTickets(env: Env): Promise<number> {
       created++;
       console.log(`HALO orphan-flush created gorelo ticket ${uuid} (halo_id=${row.halo_id})`);
     } catch (err) {
-      await putPendingTicket(env.DB, row.halo_id, row.command, row.created_at);
-      console.error(`HALO orphan-flush failed halo_id=${row.halo_id}: ${String(err)}`);
+      const attempts = row.attempts + 1;
+      if (attempts >= MAX_PENDING_ATTEMPTS) {
+        console.error(`HALO dead-letter halo_id=${row.halo_id} after ${attempts} attempts: ${String(err)}`);
+      } else {
+        await putPendingTicket(env.DB, row.halo_id, row.command, row.created_at, attempts);
+        console.error(`HALO orphan-flush failed halo_id=${row.halo_id} (attempt ${attempts}): ${String(err)}`);
+      }
     }
   }
   return created;
@@ -946,7 +1022,7 @@ export async function handleHalo(
   ctx?: ExecutionContext,
 ): Promise<Response> {
   const url = new URL(request.url);
-  const body = await logCapture(request, url);
+  const body = await logCapture(request, url, env);
 
   if (!ipAllowed(request, env)) {
     console.warn("HALO rejected: source IP not allowlisted");
@@ -969,12 +1045,16 @@ export async function handleHalo(
     res = jsonResponse(500, { error: "internal_error", detail: String(err).slice(0, 300) });
   }
 
-  // Log the response body we send back (debug phase — see exactly what Tier2 gets).
-  try {
-    const out = await res.clone().text();
-    console.log(`HALO RESPONSE ${res.status} ${request.method} ${url.pathname} -> ${out.slice(0, 1500)}`);
-  } catch {
-    /* ignore */
+  // Full response body carries PII — log it only under DEBUG_LOGS; otherwise just status.
+  if (debugOn(env)) {
+    try {
+      const out = await res.clone().text();
+      console.log(`HALO RESPONSE ${res.status} ${request.method} ${url.pathname} -> ${out.slice(0, 1500)}`);
+    } catch {
+      /* ignore */
+    }
+  } else {
+    console.log(`HALO RESPONSE ${res.status} ${request.method} ${url.pathname}`);
   }
   return res;
 }

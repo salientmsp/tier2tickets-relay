@@ -7,7 +7,6 @@ export async function initSchema(db: D1Database): Promise<void> {
     db.prepare(
       `CREATE TABLE IF NOT EXISTS devices (
         hostname     TEXT,
-        upn          TEXT,
         client_id    INTEGER,
         location_id  INTEGER,
         agent_id     TEXT,
@@ -20,15 +19,7 @@ export async function initSchema(db: D1Database): Promise<void> {
       )`,
     ),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_devices_hostname ON devices (hostname)`),
-    db.prepare(`CREATE INDEX IF NOT EXISTS idx_devices_upn ON devices (upn)`),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_devices_asset_num ON devices (asset_num)`),
-    // Email domain -> client.
-    db.prepare(
-      `CREATE TABLE IF NOT EXISTS client_domains (
-        domain    TEXT PRIMARY KEY,
-        client_id INTEGER
-      )`,
-    ),
     // Clients (customers).
     db.prepare(
       `CREATE TABLE IF NOT EXISTS clients (
@@ -71,7 +62,8 @@ export async function initSchema(db: D1Database): Promise<void> {
       `CREATE TABLE IF NOT EXISTS pending_tickets (
         halo_id    INTEGER PRIMARY KEY,
         command    TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        attempts   INTEGER NOT NULL DEFAULT 0
       )`,
     ),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_pending_created ON pending_tickets (created_at)`),
@@ -102,6 +94,25 @@ export async function initSchema(db: D1Database): Promise<void> {
     await db.prepare(`CREATE INDEX IF NOT EXISTS idx_devices_asset_num ON devices (asset_num)`).run();
   } catch {
     // index already exists / column race — fine
+  }
+  // Additive migration: attempts counter on an older pending_tickets table.
+  try {
+    await db.prepare(`ALTER TABLE pending_tickets ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`).run();
+  } catch {
+    // column already exists — fine
+  }
+  // Drop the dead osTicket-era mirror artifacts (domain matching / UPN lookup are
+  // gone). Both are unread now; best-effort so older/newer D1 builds don't error.
+  for (const stmt of [
+    `DROP TABLE IF EXISTS client_domains`,
+    `DROP INDEX IF EXISTS idx_devices_upn`,
+    `ALTER TABLE devices DROP COLUMN upn`,
+  ]) {
+    try {
+      await db.prepare(stmt).run();
+    } catch {
+      // already dropped / column absent / build doesn't support DROP COLUMN — fine
+    }
   }
 }
 
@@ -264,6 +275,7 @@ export interface PendingRow {
   halo_id: number;
   command: string;
   created_at: string;
+  attempts: number;
 }
 
 /** Store (or replace) a built Gorelo command awaiting its /actions note. */
@@ -272,20 +284,24 @@ export async function putPendingTicket(
   haloId: number,
   command: string,
   createdAt: string,
+  attempts = 0,
 ): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO pending_tickets (halo_id, command, created_at) VALUES (?,?,?)
-       ON CONFLICT(halo_id) DO UPDATE SET command = excluded.command, created_at = excluded.created_at`,
+      `INSERT INTO pending_tickets (halo_id, command, created_at, attempts) VALUES (?,?,?,?)
+       ON CONFLICT(halo_id) DO UPDATE SET
+         command = excluded.command, created_at = excluded.created_at, attempts = excluded.attempts`,
     )
-    .bind(haloId, command, createdAt)
+    .bind(haloId, command, createdAt, attempts)
     .run();
 }
 
 /** Atomically claim (delete + return) one pending ticket by its Halo id. */
 export async function takePendingTicket(db: D1Database, haloId: number): Promise<PendingRow | null> {
   return db
-    .prepare(`DELETE FROM pending_tickets WHERE halo_id = ? RETURNING halo_id, command, created_at`)
+    .prepare(
+      `DELETE FROM pending_tickets WHERE halo_id = ? RETURNING halo_id, command, created_at, attempts`,
+    )
     .bind(haloId)
     .first<PendingRow>();
 }
@@ -302,7 +318,7 @@ export async function takeStalePendingTickets(
        WHERE halo_id IN (
          SELECT halo_id FROM pending_tickets WHERE created_at < ? ORDER BY created_at LIMIT ?
        )
-       RETURNING halo_id, command, created_at`,
+       RETURNING halo_id, command, created_at, attempts`,
     )
     .bind(cutoffIso, limit)
     .all<PendingRow>();

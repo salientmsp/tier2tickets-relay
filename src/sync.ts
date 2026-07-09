@@ -1,12 +1,7 @@
 import { initSchema, setLastSync } from "./db.js";
 import { GoreloClient } from "./gorelo.js";
 import { normalizeHost } from "./parse.js";
-import type {
-  Env,
-  PublicClientResponse,
-  PublicContactResponse,
-  PublicDeviceResponse,
-} from "./types.js";
+import type { Env, PublicContactResponse, PublicDeviceResponse } from "./types.js";
 
 const INSERT_CHUNK = 100; // stay within D1's per-batch statement limits
 const FETCH_CONCURRENCY = 5; // per-client Gorelo calls in flight at once
@@ -44,7 +39,6 @@ export function assetNum(uuid: string): number {
 
 interface DeviceInsert {
   hostname: string;
-  upn: string;
   clientId: number;
   locationId: number | null;
   agentId: string;
@@ -54,10 +48,6 @@ interface DeviceInsert {
   localIp: string;
   publicIp: string;
   os: string;
-}
-interface DomainInsert {
-  domain: string;
-  clientId: number;
 }
 interface LocationInsert {
   id: number;
@@ -78,7 +68,6 @@ function toDeviceRows(agents: PublicDeviceResponse[]): DeviceInsert[] {
     if (a.clientId == null) continue; // can't route without a client
     rows.push({
       hostname: normalizeHost(a.displayName ?? a.name ?? ""),
-      upn: (a.lastLoggedOnUserUpn ?? "").trim().toLowerCase(),
       clientId: a.clientId,
       locationId: a.clientLocationId ?? null,
       agentId: a.id,
@@ -93,28 +82,16 @@ function toDeviceRows(agents: PublicDeviceResponse[]): DeviceInsert[] {
   return rows;
 }
 
-function toDomainRows(clients: PublicClientResponse[]): DomainInsert[] {
-  const seen = new Map<string, number>();
-  for (const c of clients) {
-    for (const d of c.domains ?? []) {
-      const domain = (d?.domain ?? d?.name ?? "").trim().toLowerCase();
-      if (domain && !seen.has(domain)) seen.set(domain, c.id);
-    }
-  }
-  return [...seen.entries()].map(([domain, clientId]) => ({ domain, clientId }));
-}
-
 function contactName(c: PublicContactResponse): string {
   return [c.firstName ?? "", c.lastName ?? ""].join(" ").trim();
 }
 
 /**
- * Rebuild the D1 mirror from Gorelo: clients, domains, sites, contacts, devices.
+ * Rebuild the D1 mirror from Gorelo: clients, sites, contacts, devices.
  * Runs off the request path (cron / admin / first-press bootstrap).
  */
 export async function syncAll(env: Env): Promise<{
   clients: number;
-  domains: number;
   locations: number;
   contacts: number;
   devices: number;
@@ -150,18 +127,11 @@ export async function syncAll(env: Env): Promise<{
   });
 
   const deviceRows = toDeviceRows(agents);
-  const domainRows = toDomainRows(clients);
   const clientRows = clients.map((c) => ({ id: c.id, name: (c.name ?? "").trim() }));
 
   // Rebuild every table: delete, then chunked batched inserts.
   await rebuild(env.DB, "clients", clientRows, (r) =>
     env.DB.prepare(`INSERT OR REPLACE INTO clients (id, name) VALUES (?, ?)`).bind(r.id, r.name),
-  );
-  await rebuild(env.DB, "client_domains", domainRows, (r) =>
-    env.DB.prepare(`INSERT OR REPLACE INTO client_domains (domain, client_id) VALUES (?, ?)`).bind(
-      r.domain,
-      r.clientId,
-    ),
   );
   await rebuild(env.DB, "locations", locationRows, (r) =>
     env.DB.prepare(`INSERT OR REPLACE INTO locations (id, name, client_id) VALUES (?, ?, ?)`).bind(
@@ -181,12 +151,11 @@ export async function syncAll(env: Env): Promise<{
     env.DB
       .prepare(
         `INSERT INTO devices
-          (hostname, upn, client_id, location_id, agent_id, asset_num, display_name, serial, local_ip, public_ip, os)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (hostname, client_id, location_id, agent_id, asset_num, display_name, serial, local_ip, public_ip, os)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         r.hostname,
-        r.upn,
         r.clientId,
         r.locationId,
         r.agentId,
@@ -202,7 +171,6 @@ export async function syncAll(env: Env): Promise<{
   await setLastSync(env.DB, new Date().toISOString());
   return {
     clients: clientRows.length,
-    domains: domainRows.length,
     locations: locationRows.length,
     contacts: contactRows.length,
     devices: deviceRows.length,

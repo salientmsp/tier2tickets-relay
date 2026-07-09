@@ -59,6 +59,16 @@ CATCHALL_CLIENT_ID = "15567"
 # a TAG (not a ticket type; DEFAULT_TYPE_ID stays 7045 "Incident"). Unset to skip tagging.
 HDB_TAG_ID = "31974"
 
+# Priority id used when a press is flagged "This is an emergency" (else DEFAULT_PRIORITY).
+# PublicTicketPriority enum [0..4]; 1 is the top priority in the Gorelo UI ("Critical").
+# Unset to always use DEFAULT_PRIORITY.
+EMERGENCY_PRIORITY = "1"
+
+# Verbose logging toggle. "false" (default) logs only non-PII breadcrumbs (method/path/
+# status + resolved ids). Set "true" to log full HALO CAPTURE/RESPONSE bodies — which
+# contain PII/PHI (names, emails, phones) — only for short debugging windows.
+DEBUG_LOGS = "false"
+
 # --- Secrets (set via CLI, never committed) ---
 #   wrangler secret put GORELO_API_KEY   # X-API-Key for Gorelo (ticket write + asset/contact/client read scopes)
 #   wrangler secret put ADMIN_KEY        # gates POST /admin/sync (X-Admin-Key / X-API-Key / Authorization: Bearer)

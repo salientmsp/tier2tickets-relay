@@ -68,7 +68,7 @@ wrangler d1 migrations apply tier2tickets-relay --local  # for `wrangler dev`
 # 3. Fill the Gorelo IDs in wrangler.toml [vars]
 GORELO_API_KEY=xxxx ./scripts/gorelo-ids.sh
 #   -> set DEFAULT_GROUP_ID, DEFAULT_TYPE_ID, DEFAULT_STATUS_ID, DEFAULT_PRIORITY,
-#      DEFAULT_SOURCE, CATCHALL_CLIENT_ID, HDB_TAG_ID
+#      DEFAULT_SOURCE, CATCHALL_CLIENT_ID, HDB_TAG_ID, EMERGENCY_PRIORITY, DEBUG_LOGS
 
 # 4. Set secrets (never committed)
 wrangler secret put GORELO_API_KEY     # X-API-Key for Gorelo (ticket write + asset/contact/client read)
@@ -127,7 +127,8 @@ separate `/actions` note. Gorelo has no ticket-append endpoint, so the `/tickets
 call queues the command in `pending_tickets` and the `/actions` call creates the
 single Gorelo ticket. A press whose note never arrives is created by an orphan
 flush (the `*/5 * * * *` cron, plus an opportunistic sweep off live requests)
-after `PENDING_GRACE_MS`.
+after `PENDING_GRACE_MS`. A command that keeps failing to create is **dead-lettered**
+(logged + dropped) after `MAX_PENDING_ATTEMPTS`, so it can't retry forever.
 
 **Reporter routing:** Tier2 files every press under the hardcoded
 `unregistered@helpdeskbuttons.com` user → the catch-all client, so the real identity
@@ -136,10 +137,15 @@ resolves the actual Gorelo **contact** (by reporter email — real client contac
 only; no auto-create) and **asset/client/location** (by hostname, exact then fuzzy);
 the ids Tier2 sends are used only as a last-resort fallback.
 
-**Ticket body:** the flattened report + a dump of every other submitted field +
-a `— Device —` line (from the matched Gorelo agent) + the HDB portal links
-(`View Report` = screenshots/diagnostics, `Connect to Computer` = remote session,
-extracted from the `/actions` note) + a routing trail.
+**Ticket body (HTML):** the description is HTML (Gorelo renders it as such). It has a
+**Report Summary** (fields + non-default selections as bullets — the two always-on
+defaults are stripped), a **Device** section pulled live from the Gorelo agent record
+(`GET /v1/assets/agents/{id}`: model, CPU, memory, OS, serial, IPs, last user, and
+last-boot shown as a relative age using the agent's `timeZone`), and the **View
+Report** link (screenshots/diagnostics). The routing outcome is logged, not shown.
+
+**Priority:** a press flagged "This is an emergency" is created at `EMERGENCY_PRIORITY`
+(else `DEFAULT_PRIORITY`).
 
 **ID mapping:** Halo `client_id`/`site_id`/`user_id` *are* the Gorelo client / location
 / contact ids (the lookups return them). Assets use a deterministic numeric surrogate
@@ -154,9 +160,10 @@ HDB hosts the full report and the remote session on its own portal and only send
 hyperlinks, which we surface in the ticket. Gorelo's public API has no attachment
 endpoint, so linking is the only way to reach that content from a ticket.
 
-**Capture logging:** every Halo request/response is logged with `HALO CAPTURE` /
-`HALO RESPONSE` prefixes (secrets redacted), and routing decisions with a
-`HALO routing:` line — paste those if anything doesn't line up.
+**Logging:** by default only non-PII breadcrumbs are logged (method/path/status +
+resolved ids in the `HALO routing:` line). Set `DEBUG_LOGS=true` to log full
+`HALO CAPTURE` / `HALO RESPONSE` bodies (which contain PII/PHI — names, emails,
+phones) for a short debugging window, then turn it back off.
 
 ## Data store & refresh
 
@@ -169,7 +176,7 @@ Gorelo's agent/client lists have no server-side filters, so they're mirrored int
 - **Manual** `POST /admin/sync` (gated by `ADMIN_KEY`) for post-onboarding refresh.
 - **Lazy bootstrap** — on the first Halo call ever (no `last_sync` row), `syncAll()`
   runs once inline so a fresh deploy self-heals.
-- `syncAll()` mirrors clients, domains, locations (per-client), contacts (per-client,
+- `syncAll()` mirrors clients, locations (per-client), contacts (per-client,
   bounded concurrency) and the agent fleet (rich device rows with `asset_num`),
   rebuilding each table (delete + chunked batched inserts), with retry/backoff on
   Gorelo `429`/`5xx`.

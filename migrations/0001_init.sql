@@ -5,7 +5,6 @@
 -- Agents/devices (Halo asset lookup + ticket enrichment).
 CREATE TABLE IF NOT EXISTS devices (
   hostname     TEXT,
-  upn          TEXT,
   client_id    INTEGER,
   location_id  INTEGER,
   agent_id     TEXT,
@@ -17,14 +16,7 @@ CREATE TABLE IF NOT EXISTS devices (
   os           TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_devices_hostname ON devices (hostname);
-CREATE INDEX IF NOT EXISTS idx_devices_upn ON devices (upn);
 CREATE INDEX IF NOT EXISTS idx_devices_asset_num ON devices (asset_num);
-
--- Email domain -> client.
-CREATE TABLE IF NOT EXISTS client_domains (
-  domain    TEXT PRIMARY KEY,
-  client_id INTEGER
-);
 
 -- Clients (customers).
 CREATE TABLE IF NOT EXISTS clients (
@@ -54,3 +46,13 @@ CREATE TABLE IF NOT EXISTS sync_meta (
   key   TEXT PRIMARY KEY,
   value TEXT
 );
+
+-- Deferred Gorelo ticket creates: /tickets queues the built command here, /actions
+-- (or the orphan-flush cron) creates it. `attempts` drives the dead-letter cap.
+CREATE TABLE IF NOT EXISTS pending_tickets (
+  halo_id    INTEGER PRIMARY KEY,
+  command    TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  attempts   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_pending_created ON pending_tickets (created_at);

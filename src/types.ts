@@ -16,6 +16,8 @@ export interface Env {
   DEFAULT_SOURCE: string; // TicketSource int as string
   CATCHALL_CLIENT_ID: string; // int as string
   HDB_TAG_ID?: string; // Gorelo tag id applied to every HDB ticket ("Submitted VIA HDB")
+  EMERGENCY_PRIORITY?: string; // priority id for a press flagged "This is an emergency"
+  DEBUG_LOGS?: string; // "true" enables verbose HALO CAPTURE/RESPONSE body logging (PII)
 
   // secrets (wrangler secret put ...)
   GORELO_API_KEY: string; // X-API-Key sent to Gorelo
@@ -80,6 +82,7 @@ export interface PublicDeviceResponse {
   lastLoggedOnUser?: string | null;
   lastLoggedOnUserUpn?: string | null;
   lastBootUpTime?: string | null;
+  timeZone?: string | null;
   // Richer hardware/OS detail (present on GET /v1/assets/agents/{id}) — surfaced in
   // the ticket so a tech sees the machine without clicking through.
   os?: string | null;
