@@ -1,6 +1,6 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import worker from "../src/index.js";
+import worker, { toOsTicketNumber } from "../src/index.js";
 import { initSchema } from "../src/db.js";
 
 const GORELO = "https://api.usw.gorelo.io";
@@ -107,8 +107,9 @@ describe("ticket create handler", () => {
     const res = await dispatch(post(body, "application/json"));
 
     expect(res.status).toBe(201);
-    // Body is the ticket id with hyphens stripped (osTicket-style, Tier2-parseable).
-    expect(await res.text()).toBe(TICKET_ID.replace(/-/g, ""));
+    // Body is a numeric osTicket-style ticket number derived from the UUID.
+    expect(await res.text()).toBe(toOsTicketNumber(TICKET_ID));
+    expect(res.headers.get("content-type")).toBe("text/html; charset=UTF-8");
 
     expect(posted).toMatchObject({
       title: "Printer down",
@@ -207,12 +208,13 @@ describe("ticket create handler", () => {
     const prev = env.ENFORCE_IP_ALLOWLIST;
     env.ENFORCE_IP_ALLOWLIST = "true";
     route("GET", isContacts, () => json(200, []));
-    route("POST", isTickets, () => json(201, { ticketId: "OK-1" }));
+    const RID = "a1b2c3d4-0000-0000-0000-000000000000";
+    route("POST", isTickets, () => json(201, { ticketId: RID }));
     try {
       const body = JSON.stringify({ email: "user@corp.com", subject: "x", message: "y [[hdb host=pc-01]]" });
       const res = await dispatch(post(body, "application/json", { "CF-Connecting-IP": "34.202.14.153" }));
       expect(res.status).toBe(201);
-      expect(await res.text()).toBe("OK1"); // hyphen stripped
+      expect(await res.text()).toBe(toOsTicketNumber(RID)); // numeric derivation
     } finally {
       env.ENFORCE_IP_ALLOWLIST = prev;
     }
