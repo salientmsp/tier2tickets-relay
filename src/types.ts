@@ -89,8 +89,17 @@ export interface PublicClientResponse {
 export interface PublicContactResponse {
   id: number;
   primaryEmail?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
   clientId?: number | null;
   clientLocationId?: number | null;
+}
+
+/** GET /v1/clients/{clientId}/locations item. */
+export interface PublicClientLocationResponse {
+  id: number;
+  name?: string | null;
+  clientId?: number | null;
 }
 
 /** Normalized identity extracted from a Helpdesk Buttons press. */

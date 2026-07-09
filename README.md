@@ -117,30 +117,43 @@ run `wrangler dev`.
 | `POST /admin/sync` | `X-Admin-Key` / `X-API-Key` / `Authorization: Bearer` = `<ADMIN_KEY>` | Rebuild the D1 mirror on demand |
 | `GET /health` | none | Liveness check |
 
-## HaloPSA/ITSM mock (in progress — Phase 1: capture)
+## HaloPSA/ITSM mock (`src/halo.ts`)
 
-osTicket is create-only, so Tier2 never does a PSA contact/asset lookup for it. To
-unlock those behaviors (recognizing the user, matching company/contact, attaching
-assets, bidirectional webhooks) the Worker also mocks **HaloPSA/ITSM**, the most
-capable ticket system Tier2 supports. Because Tier2's client is opaque and Halo has
-many endpoints, this is built in two phases:
+osTicket is create-only, so Tier2 never does a PSA lookup for it. To unlock the
+richer behaviors — recognizing the user, matching company/contact/site, attaching
+assets — the Worker also mocks **HaloPSA/ITSM** (the most capable integration Tier2
+supports), backed entirely by Gorelo. Configure Tier2 as **Cloud Hosted**:
+Resource Server *and* Authorization Server both = the Worker host, API key
+`tenant+client_id:client_secret` (set `HALO_CLIENT_ID`/`HALO_CLIENT_SECRET` to the
+same values; the on-prem `client_id:client_secret` form is tolerated too).
 
-- **Phase 1 (current, `src/halo.ts`):** completes the OAuth2 `POST /auth/token`
-  handshake, **logs every request** (method / path / query / body, secrets redacted)
-  with a `HALO CAPTURE` prefix, and returns minimal, plausible Halo shapes (empty
-  `{ clients|users|assets: [] }` lookups; a synthetic numeric ticket id on
-  `POST /api/Tickets`). **No Gorelo writes yet** — this phase exists to capture
-  Tier2's exact request sequence safely.
-- **Phase 2 (next):** replace the synthetic responses with real Gorelo-backed
-  lookups (client/contact/asset) and ticket create, matched to the shapes the
-  capture reveals.
+Flow (routed by path, so it coexists with the osTicket path — untouched):
 
-**To capture:** set `HALO_CLIENT_ID` / `HALO_CLIENT_SECRET` secrets, configure a
-**test** Tier2 HaloPSA integration pointed at the Worker host (Resource Server *and*
-Authorization Server both = the Worker; API key `tenant+client_id:client_secret`),
-run the Integration Test + one press, then read the `HALO CAPTURE …` lines in the
-Workers logs. Paste those back to drive Phase 2. The osTicket path is untouched, so
-this can't disturb a working osTicket setup.
+| Tier2 call | Worker response |
+|---|---|
+| `POST /auth/token` (client_credentials) | OAuth2 bearer token (validates `HALO_CLIENT_ID/SECRET` if set) |
+| `GET /api/Users?search={email}` | the Gorelo **contact** (id/name/email/client/site); the `unregistered@helpdeskbuttons.com` catch-all maps to `CATCHALL_CLIENT_ID` |
+| `GET /api/Client` / `GET /api/Site` | Gorelo **clients** / **locations** from the mirror |
+| `GET /api/Asset?search={hostname}` | the Gorelo **agent/device** (numeric surrogate id ↔ agent UUID) |
+| `GET /api/TicketType\|Status\|Team\|Priority\|Agent` | minimal default lists (from env) |
+| `POST /api/Tickets` | maps client/site/user/asset ids + **all** submitted fields into a Gorelo ticket, returns a Halo-shaped created ticket (`gorelo_ticket_id` carries the real UUID) |
+| `POST /api/Actions` | accepted + logged (Gorelo's public API has no ticket-note endpoint) |
+
+**ID mapping:** Halo `client_id`/`site_id`/`user_id` *are* the Gorelo client / location
+/ contact ids (the lookups return them). Assets use a deterministic numeric surrogate
+of the agent UUID (`asset_num`, stored in D1), mapped back on create.
+
+**Max data:** the ticket create dumps every field Tier2 sends (categories, custom
+fields, priority/team/type, selections, identity, …) into the Gorelo description —
+we slim this down once we see real submissions.
+
+**Mirror:** `syncAll()` now also mirrors **clients, sites, and contacts** (per-client,
+bounded concurrency) so the Halo lookups are fast point reads; the first Halo `/api/*`
+call lazy-bootstraps the mirror.
+
+Every Halo request is still logged with a `HALO CAPTURE` prefix (secrets redacted) so
+the exact shapes can be refined against real traffic — paste those lines if anything
+doesn't line up.
 
 ## Matching algorithm
 

@@ -45,8 +45,11 @@ export default {
     if (request.method === "POST" && url.pathname === "/admin/sync") {
       if (!adminKeyOk(request, env)) return textResponse(401, "unauthorized");
       try {
-        const result = await syncAll(env);
-        return textResponse(200, `ok devices=${result.devices} domains=${result.domains}`);
+        const r = await syncAll(env);
+        return textResponse(
+          200,
+          `ok clients=${r.clients} domains=${r.domains} locations=${r.locations} contacts=${r.contacts} devices=${r.devices}`,
+        );
       } catch (err) {
         console.error("admin sync failed", describeError(err));
         return textResponse(502, "sync failed");
@@ -77,7 +80,11 @@ export default {
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(
       syncAll(env)
-        .then((r) => console.log(`cron sync ok devices=${r.devices} domains=${r.domains}`))
+        .then((r) =>
+          console.log(
+            `cron sync ok clients=${r.clients} domains=${r.domains} locations=${r.locations} contacts=${r.contacts} devices=${r.devices}`,
+          ),
+        )
         .catch((err) => console.error("cron sync failed", describeError(err))),
     );
   },

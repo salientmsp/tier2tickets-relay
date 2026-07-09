@@ -1,6 +1,7 @@
 import type {
   CreatePublicTicketCommand,
   Env,
+  PublicClientLocationResponse,
   PublicClientResponse,
   PublicContactResponse,
   PublicDeviceResponse,
@@ -93,6 +94,14 @@ export class GoreloClient {
       `/v1/contacts?clientid=${encodeURIComponent(String(clientId))}`,
     );
     return asArray<PublicContactResponse>(raw);
+  }
+
+  /** GET /v1/clients/{clientId}/locations — sites for one client. */
+  async listLocations(clientId: number): Promise<PublicClientLocationResponse[]> {
+    const raw = await this.getJsonWithRetry<unknown>(
+      `/v1/clients/${encodeURIComponent(String(clientId))}/locations`,
+    );
+    return asArray<PublicClientLocationResponse>(raw);
   }
 
   /**
