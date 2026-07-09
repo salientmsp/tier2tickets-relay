@@ -275,6 +275,37 @@ describe("Halo deferred ticket create (/tickets queues, /actions creates)", () =
     expect(row).toBeNull();
   });
 
+  it("surfaces the HDB report/remote links from the /actions note into the ticket", async () => {
+    const cap = captureGoreloCreate();
+    const created = await req("/tickets", {
+      method: "POST",
+      headers: { "content-type": "application/json", "halo-app-name": "tier2tech" },
+      body: JSON.stringify([{ summary: "help", details_html: reportHtml({ email: "user@corp.com" }) }]),
+    });
+    const haloId = ((await created.json()) as { id: number }).id;
+
+    const res = await req("/actions", {
+      method: "POST",
+      headers: { "content-type": "application/json", "halo-app-name": "tier2tech" },
+      body: JSON.stringify([
+        {
+          ticket_id: haloId,
+          note_html:
+            `<html><head><style>@font-face{font-family:'X'}</style></head><body>` +
+            `You have a new ticket number ${haloId}. ` +
+            `<a href="https://portal.helpdeskbuttons.com/r/abc">View Report</a> ` +
+            `<a href="https://portal.helpdeskbuttons.com/c/abc">Connect to Computer</a></body></html>`,
+        },
+      ]),
+    });
+    expect(res.status).toBe(201);
+    const desc = String(cap.posted()?.description);
+    expect(desc).toContain("View Report: https://portal.helpdeskbuttons.com/r/abc");
+    expect(desc).toContain("Connect to Computer: https://portal.helpdeskbuttons.com/c/abc");
+    // The font-CSS boilerplate is still not dumped.
+    expect(desc).not.toContain("@font-face");
+  });
+
   it("correlates the note by the ticket number in its text when no explicit id is sent", async () => {
     const cap = captureGoreloCreate();
     const created = await req("/tickets", {

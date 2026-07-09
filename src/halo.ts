@@ -1,6 +1,6 @@
 import {
   findContactByEmail,
-  findDeviceByHostname,
+  findDeviceFullByHostname,
   getAgentIdByAssetNum,
   getClientName,
   getContactById,
@@ -14,7 +14,7 @@ import {
   takePendingTicket,
   takeStalePendingTickets,
   type ContactRow,
-  type DeviceRow,
+  type DeviceFullRow,
 } from "./db.js";
 import { GoreloClient, GoreloError, extractTicketNumber } from "./gorelo.js";
 import { normalizeEmail, normalizeHost } from "./parse.js";
@@ -446,6 +446,7 @@ interface Routing {
   email: string;
   hostname: string;
   assetMatched: boolean;
+  device: DeviceFullRow | null;
   report: Record<string, string>;
 }
 
@@ -462,17 +463,17 @@ async function resolveRouting(env: Env, t: HaloTicket): Promise<Routing> {
   if (uid && uid !== HALO_UNREGISTERED_USER_ID) contact = await getContactById(env.DB, uid);
   if (!contact && email) contact = await findContactByEmail(env.DB, email);
 
-  // Device by hostname (from the report) — an agent asset link plus a
-  // client/location fallback when the email didn't resolve a contact. Tier2 looks
-  // the asset up separately but does NOT send it on create, so we re-resolve here.
-  // Exact hostname first, then the same fuzzy match the /asset lookup uses (the
-  // stored hostname can be a display-name/serial variant of what the report shows).
-  let device: DeviceRow | null = null;
+  // Device by hostname (from the report) — the agent asset link, a client/location
+  // fallback, and extra hardware detail for the ticket. Tier2 looks the asset up
+  // separately but does NOT send it on create, so we re-resolve here: exact
+  // hostname first, then the same fuzzy match the /asset lookup uses (the stored
+  // hostname can be a display-name/serial variant of what the report shows).
+  let device: DeviceFullRow | null = null;
   if (hostname) {
-    device = await findDeviceByHostname(env.DB, hostname);
+    device = await findDeviceFullByHostname(env.DB, hostname);
     if (!device) {
-      const [row] = await searchDeviceRows(env.DB, hostname, undefined, 1);
-      if (row) device = { client_id: row.client_id ?? 0, location_id: row.location_id, agent_id: row.agent_id };
+      const [fuzzy] = await searchDeviceRows(env.DB, hostname, undefined, 1);
+      device = fuzzy ?? null;
     }
   }
 
@@ -507,20 +508,50 @@ async function resolveRouting(env: Env, t: HaloTicket): Promise<Routing> {
     email,
     hostname,
     assetMatched: agentAssetIds.length > 0,
+    device,
     report,
   };
 }
 
-const FIELD_MAX = 2000; // cap any single field so a base64 attachment can't bloat the ticket
+const FIELD_MAX = 2000; // cap any single extra field so one value can't bloat the ticket
+const BODY_MAX = 16000; // generous cap on the whole report body — keep everything, guard only pathological blobs
 
-function truncate(s: string): string {
-  return s.length > FIELD_MAX ? `${s.slice(0, FIELD_MAX)}… [truncated ${s.length - FIELD_MAX} chars]` : s;
+function truncate(s: string, max = FIELD_MAX): string {
+  return s.length > max ? `${s.slice(0, max)}… [truncated ${s.length - max} chars]` : s;
 }
 
-/** Build the ticket body: the report (HTML flattened to clean text) + a short routing trail. */
+// Fields we already surface elsewhere (report body / dedicated handling), so they
+// don't need to appear again in the raw-fields dump.
+const DUMP_SKIP = new Set(["details_html", "details", "summary", "subject", "note_html", "note"]);
+
+/** Dump every remaining top-level field Tier2 sent, so nothing is silently lost. */
+function dumpSubmittedFields(t: HaloTicket): string {
+  const lines: string[] = [];
+  for (const [k, v] of Object.entries(t)) {
+    if (DUMP_SKIP.has(k) || v == null || v === "" || (Array.isArray(v) && v.length === 0)) continue;
+    const rendered = typeof v === "object" ? JSON.stringify(v) : String(v);
+    lines.push(`${k}: ${truncate(rendered)}`);
+  }
+  return lines.length ? ["— All submitted fields —", ...lines].join("\n") : "";
+}
+
+/** One-line hardware summary from the matched Gorelo agent (blank if no match). */
+function deviceSection(d: DeviceFullRow | null): string {
+  if (!d) return "";
+  const ips = [d.local_ip, d.public_ip].filter((s) => s && s.trim()).join(" / ");
+  const parts = [
+    d.display_name || d.hostname,
+    d.os,
+    d.serial ? `SN ${d.serial}` : "",
+    ips ? `IP ${ips}` : "",
+  ].filter((s) => s && String(s).trim());
+  return parts.length ? `— Device —\n${parts.join(" · ")}` : "";
+}
+
+/** Build the ticket body: the report + every submitted field + device details + routing. */
 function buildHaloDescription(t: HaloTicket, routing: Routing): string {
   const raw = str(t.details_html) || str(t.details) || str(t.summary);
-  const body = truncate(htmlToText(raw));
+  const body = truncate(htmlToText(raw), BODY_MAX);
 
   // The report body already shows reporter/company/hostname, so keep the trail to
   // just the routing outcome (which Gorelo ids we matched, and the asset status).
@@ -534,7 +565,30 @@ function buildHaloDescription(t: HaloTicket, routing: Routing): string {
     `Client: ${routing.clientId}  Contact: ${routing.contactId ?? "none"}  Asset: ${assetStatus}`,
   ].join("\n");
 
-  return [body, trail].filter((s) => s.length > 0).join("\n\n");
+  return [body, dumpSubmittedFields(t), deviceSection(routing.device), trail]
+    .filter((s) => s.length > 0)
+    .join("\n\n");
+}
+
+/**
+ * Extract the report/remote links HDB embeds in the /actions note. HDB hosts the
+ * full report (screenshots, diagnostic data) and the remote-connect session on its
+ * own portal and only sends hyperlinks — Gorelo has no attachment API, so surfacing
+ * these links in the ticket is how a tech reaches the screenshots/diag/remote.
+ */
+function extractNoteLinks(html: string): Array<{ label: string; href: string }> {
+  const out: Array<{ label: string; href: string }> = [];
+  const seen = new Set<string>();
+  const re = /<a\s[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const href = decodeEntities(m[1]!).trim();
+    if (!/^https?:\/\//i.test(href) || seen.has(href)) continue;
+    seen.add(href);
+    const label = htmlToText(m[2]!).trim() || "Link";
+    out.push({ label, href });
+  }
+  return out;
 }
 
 function buildTicketCommand(env: Env, t: HaloTicket, routing: Routing): CreatePublicTicketCommand {
@@ -635,10 +689,18 @@ async function handleActions(env: Env, body: string): Promise<Response> {
     return jsonResponse(201, [{ id: actionId, ticket_id: haloId }]);
   }
 
-  // The /actions note is Tier2's notification email — fully redundant with the
-  // report already in the ticket body, and its <head>/<style> flatten into noise.
-  // So we DON'T append it; the note's only job here was to trigger the create.
+  // The /actions note is Tier2's notification email — its body is redundant with
+  // the report already in the ticket, and its <head>/<style> flatten into noise,
+  // so we don't dump it. But it carries the HDB portal hyperlinks (View Report =
+  // screenshots/diagnostics, Connect to Computer = remote session); those we DO
+  // surface, since Gorelo has no attachment API and this is the only path to them.
   const cmd = JSON.parse(pending.command) as CreatePublicTicketCommand;
+  const links = extractNoteLinks(noteText);
+  if (links.length) {
+    const rendered = links.map((l) => `${l.label}: ${l.href}`).join("\n");
+    cmd.description = `${cmd.description}\n\n— Helpdesk Buttons report —\n${rendered}`;
+    console.log(`HALO action halo_id=${haloId}: attached ${links.length} report link(s)`);
+  }
 
   try {
     const raw = await new GoreloClient(env).createTicket(cmd);

@@ -269,6 +269,19 @@ export async function searchDeviceRows(
   return results ?? [];
 }
 
+/** Full device row by exact (normalized) hostname — for asset link + ticket enrichment. */
+export async function findDeviceFullByHostname(
+  db: D1Database,
+  host: string,
+): Promise<DeviceFullRow | null> {
+  if (!host) return null;
+  const cols = `hostname, agent_id, asset_num, client_id, location_id, display_name, serial, local_ip, public_ip, os`;
+  return db
+    .prepare(`SELECT ${cols} FROM devices WHERE hostname = ? LIMIT 1`)
+    .bind(host)
+    .first<DeviceFullRow>();
+}
+
 /** Map a Halo asset id (our numeric surrogate) back to the Gorelo agent uuid. */
 export async function getAgentIdByAssetNum(db: D1Database, assetNum: number): Promise<string | null> {
   const row = await db
