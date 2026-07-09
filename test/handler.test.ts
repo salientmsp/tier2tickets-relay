@@ -107,7 +107,8 @@ describe("ticket create handler", () => {
     const res = await dispatch(post(body, "application/json"));
 
     expect(res.status).toBe(201);
-    expect(await res.text()).toBe(TICKET_ID);
+    // Body is the ticket id with hyphens stripped (osTicket-style, Tier2-parseable).
+    expect(await res.text()).toBe(TICKET_ID.replace(/-/g, ""));
 
     expect(posted).toMatchObject({
       title: "Printer down",
@@ -206,12 +207,12 @@ describe("ticket create handler", () => {
     const prev = env.ENFORCE_IP_ALLOWLIST;
     env.ENFORCE_IP_ALLOWLIST = "true";
     route("GET", isContacts, () => json(200, []));
-    route("POST", isTickets, () => json(201, { ticketNumber: "OK-1" }));
+    route("POST", isTickets, () => json(201, { ticketId: "OK-1" }));
     try {
       const body = JSON.stringify({ email: "user@corp.com", subject: "x", message: "y [[hdb host=pc-01]]" });
       const res = await dispatch(post(body, "application/json", { "CF-Connecting-IP": "34.202.14.153" }));
       expect(res.status).toBe(201);
-      expect(await res.text()).toBe("OK-1");
+      expect(await res.text()).toBe("OK1"); // hyphen stripped
     } finally {
       env.ENFORCE_IP_ALLOWLIST = prev;
     }
