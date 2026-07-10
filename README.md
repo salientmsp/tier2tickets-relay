@@ -237,3 +237,16 @@ A snapshot of the live spec is captured at [`docs/gorelo-swagger.v1.json`](docs/
 Gorelo API base: `https://api.usw.gorelo.io` (US) / `https://api.aue.gorelo.io`
 (AU). Spec: `https://api.usw.gorelo.io/swagger/v1/swagger.json`. Auth header:
 `X-API-Key`. Keys are scoped — a key lacking a scope returns `403`.
+
+## Configuration note
+
+The `[vars]` in `wrangler.toml` (Gorelo group/type/status/client ids, the
+catch-all client, tag ids) are populated for one specific Gorelo tenant. They are
+tenant configuration, not secrets — but if you deploy your own instance, re-run
+`scripts/gorelo-ids.sh` and replace them (and the `database_id`) with your own.
+All actual secrets (`GORELO_API_KEY`, `ADMIN_KEY`, `NOTIFLY_URLS`, the optional
+Halo OAuth pair) are set via `wrangler secret put` and are never committed.
+
+## License
+
+Released under the [MIT License](LICENSE).
