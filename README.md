@@ -111,11 +111,12 @@ Configure Tier2 as a **HaloPSA — Cloud Hosted** integration:
 |---|---|---|
 | `POST /token`, `/users`, `/client`, `/site`, `/asset`, `/tickets`, `/actions`, … | OAuth2 client_credentials + IP allowlist (routed by the `halo-app-name` header) | HaloPSA mock (see below) |
 | `POST /admin/sync` | `X-Admin-Key` / `X-API-Key` / `Authorization: Bearer` = `<ADMIN_KEY>` | Refresh the D1 mirror on demand (fans location fetches out to the queue) |
-| `GET /admin/status` | `ADMIN_KEY` (same as `/admin/sync`) | JSON: mirror row counts, `lastSync`, and location-queue progress (`enqueued` / `enqueuedAt` / `lastConsumerRunAt` / `drained`) — follow the location fan-out |
+| `GET /admin/status` | `ADMIN_KEY` (same as `/admin/sync`) | Pretty JSON: mirror row counts, `lastSync`, and `locationQueue` (`queued` / `drained` / `lagSeconds`) — follow the location fan-out |
 | `POST /admin/test-webhook` | `ADMIN_KEY` (same as `/admin/sync`) | Fire a test alert through the dead-letter webhook and report its HTTP status |
 | `GET`/`HEAD` `/health` | none | Liveness check (accepts `HEAD` for uptime monitors) |
 
-Anything else returns `404`.
+A recognized path hit with the wrong method returns `405` with an `Allow` header
+naming the right one (not a misleading `404`). Anything else returns `404`.
 
 ## HaloPSA/ITSM mock (`src/halo.ts`)
 

@@ -12,17 +12,30 @@ const textResponse = (status: number, body: string): Response =>
   new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
 
 const jsonResponse = (status: number, body: unknown): Response =>
-  new Response(JSON.stringify(body), {
+  // Pretty-printed with a trailing newline — this is read by humans curling it.
+  new Response(`${JSON.stringify(body, null, 2)}\n`, {
     status,
     headers: { "content-type": "application/json; charset=utf-8" },
+  });
+
+// 405 for a recognized path hit with the wrong method — names the allowed
+// method(s) (and sets the Allow header) so callers aren't left guessing with a 404.
+const methodNotAllowed = (allow: string): Response =>
+  new Response(`method not allowed (${allow} only)`, {
+    status: 405,
+    headers: { "content-type": "text/plain; charset=utf-8", allow },
   });
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
+    // App's own endpoints: match on path, then validate the method so a wrong
+    // method gets a clear 405 + Allow header (not a misleading 404). `matched`
+    // stays true once a path is recognized, so we never fall through to Halo/404.
     // Admin: manual mirror refresh, gated by ADMIN_KEY.
-    if (request.method === "POST" && url.pathname === "/admin/sync") {
+    if (url.pathname === "/admin/sync") {
+      if (request.method !== "POST") return methodNotAllowed("POST");
       if (!adminKeyOk(request, env)) return textResponse(401, "unauthorized");
       try {
         const r = await syncAll(env);
@@ -39,10 +52,11 @@ export default {
       }
     }
 
-    // Admin: sync + location-queue status (ADMIN_KEY). Lets you "follow" the
-    // location fan-out — compare when work was last enqueued vs. when the consumer
-    // last ran, alongside current mirror row counts.
-    if (request.method === "GET" && url.pathname === "/admin/status") {
+    // Admin: sync + location-queue status (ADMIN_KEY). Follow the location fan-out:
+    // how many messages the last sync enqueued and whether the consumer has caught
+    // up, alongside current mirror row counts.
+    if (url.pathname === "/admin/status") {
+      if (request.method !== "GET") return methodNotAllowed("GET");
       if (!adminKeyOk(request, env)) return textResponse(401, "unauthorized");
       await initSchema(env.DB);
       const [counts, lastSync, enqueued, enqueuedAt, syncedAt] = await Promise.all([
@@ -52,22 +66,25 @@ export default {
         getSyncMeta(env.DB, "locations_enqueued_at"),
         getSyncMeta(env.DB, "locations_synced_at"),
       ]);
-      // Heuristic: the consumer has caught up if it ran at/after the last enqueue.
-      const drained = enqueuedAt != null && syncedAt != null && syncedAt >= enqueuedAt;
+      // How long the consumer took to drain after the last enqueue (null until it
+      // has run at/after it); `drained` is just whether that lag is known.
+      const enqMs = enqueuedAt ? Date.parse(enqueuedAt) : NaN;
+      const syncMs = syncedAt ? Date.parse(syncedAt) : NaN;
+      const caughtUp = Number.isFinite(enqMs) && Number.isFinite(syncMs) && syncMs >= enqMs;
       return jsonResponse(200, {
-        mirror: counts,
         lastSync,
+        mirror: counts,
         locationQueue: {
-          enqueued: enqueued != null ? Number(enqueued) : null,
-          enqueuedAt,
-          lastConsumerRunAt: syncedAt,
-          drained,
+          queued: enqueued != null ? Number(enqueued) : null,
+          drained: caughtUp,
+          lagSeconds: caughtUp ? Math.round((syncMs - enqMs) / 1000) : null,
         },
       });
     }
 
     // Admin: fire a test alert through the notifly dead-letter path (ADMIN_KEY).
-    if (request.method === "POST" && url.pathname === "/admin/test-webhook") {
+    if (url.pathname === "/admin/test-webhook") {
+      if (request.method !== "POST") return methodNotAllowed("POST");
       if (!adminKeyOk(request, env)) return textResponse(401, "unauthorized");
       const r = await testNotifly(env);
       if (!r.configured) return textResponse(400, "NOTIFLY_URLS not set");
@@ -82,9 +99,10 @@ export default {
       );
     }
 
-    // Lightweight health check (no secrets). Accept HEAD too — most uptime
-    // monitors probe with HEAD, which must not fall through to the 404 below.
-    if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/health") {
+    // Lightweight health check (no secrets). GET or HEAD — most uptime monitors
+    // probe with HEAD.
+    if (url.pathname === "/health") {
+      if (request.method !== "GET" && request.method !== "HEAD") return methodNotAllowed("GET, HEAD");
       return textResponse(200, "ok");
     }
 

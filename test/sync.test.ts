@@ -260,34 +260,45 @@ describe("syncAll delta reconcile (inline tables + location fan-out)", () => {
   });
 });
 
-describe("GET /admin/status", () => {
-  async function status(headers?: Record<string, string>): Promise<Response> {
+describe("/admin/status", () => {
+  async function status(method: string, headers?: Record<string, string>): Promise<Response> {
     const ctx = createExecutionContext();
-    const res = await worker.fetch(new Request("https://t2t.example.com/admin/status", { headers }), env, ctx);
+    const res = await worker.fetch(
+      new Request("https://t2t.example.com/admin/status", { method, headers }),
+      env,
+      ctx,
+    );
     await waitOnExecutionContext(ctx);
     return res;
   }
 
   it("requires the admin key", async () => {
-    expect((await status()).status).toBe(401);
+    expect((await status("GET")).status).toBe(401);
+  });
+
+  it("is GET-only: a wrong method returns 405 (not 404) with an Allow header", async () => {
+    const res = await status("POST", { "X-Admin-Key": "test-admin-key" });
+    expect(res.status).toBe(405);
+    expect(res.headers.get("allow")).toBe("GET");
   });
 
   it("reports mirror counts and location-queue drain progress", async () => {
     await syncAll(makeQueue().env); // enqueues 1 location message, stamps enqueued_at
     await runConsumer([10]); // consumer reconciles client 10, stamps synced_at
 
-    const res = await status({ "X-Admin-Key": "test-admin-key" });
+    const res = await status("GET", { "X-Admin-Key": "test-admin-key" });
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       mirror: { clients: number; locations: number; contacts: number; devices: number };
       lastSync: string | null;
-      locationQueue: { enqueued: number | null; drained: boolean };
+      locationQueue: { queued: number | null; drained: boolean; lagSeconds: number | null };
     };
     expect(body.mirror).toMatchObject({ clients: 1, contacts: 1, devices: 1 });
     expect(body.mirror.locations).toBe(1); // consumer wrote client 10's site
     expect(body.lastSync).toBeTruthy();
-    expect(body.locationQueue.enqueued).toBe(1);
+    expect(body.locationQueue.queued).toBe(1);
     expect(body.locationQueue.drained).toBe(true); // consumer ran after the enqueue
+    expect(body.locationQueue.lagSeconds).toBeGreaterThanOrEqual(0);
   });
 });
 

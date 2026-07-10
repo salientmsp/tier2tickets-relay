@@ -119,6 +119,24 @@ describe("health check", () => {
     const res = await req("/health", { method: "HEAD" });
     expect(res.status).toBe(200);
   });
+  it("returns 405 (not 404) for POST /health", async () => {
+    const res = await req("/health", { method: "POST" });
+    expect(res.status).toBe(405);
+    expect(res.headers.get("allow")).toBe("GET, HEAD");
+  });
+});
+
+describe("method guards on app endpoints", () => {
+  it("returns 405 + Allow: POST for GET /admin/sync", async () => {
+    const res = await req("/admin/sync", { method: "GET" });
+    expect(res.status).toBe(405);
+    expect(res.headers.get("allow")).toBe("POST");
+  });
+  it("returns 405 + Allow: POST for GET /admin/test-webhook", async () => {
+    const res = await req("/admin/test-webhook", { method: "GET" });
+    expect(res.status).toBe(405);
+    expect(res.headers.get("allow")).toBe("POST");
+  });
 });
 
 describe("Halo OAuth token", () => {
