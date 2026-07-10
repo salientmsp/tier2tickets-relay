@@ -25,7 +25,7 @@ Helpdesk Buttons ──Halo API (OAuth + lookups + create + note)──▶  Work
    POST /tickets                                                    ├─ POST /actions: fold in report links, CREATE the Gorelo ticket
    POST /actions (report note)                                      └─ orphan flush creates any press whose note never arrives
 
-Cron (every 6h) / POST /admin/sync / first-call bootstrap ──▶ syncAll() rebuilds the D1 mirror
+Cron (every 6h) / POST /admin/sync / first-call bootstrap ──▶ syncAll() delta-reconciles the D1 mirror
 ```
 
 - Tier2 sends every Halo call with a `halo-app-name` header (and unprefixed
@@ -216,8 +216,13 @@ Gorelo's agent/client lists have no server-side filters, so they're mirrored int
   runs once inline so a fresh deploy self-heals.
 - `syncAll()` mirrors clients, locations (per-client), contacts (per-client,
   bounded concurrency) and the agent fleet (rich device rows with `asset_num`),
-  rebuilding each table (delete + chunked batched inserts), with retry/backoff on
-  Gorelo `429`/`5xx`.
+  with retry/backoff on Gorelo `429`/`5xx`. It **delta-reconciles** each table
+  rather than rewriting it: every fetched row is upserted with an `ON CONFLICT …
+  DO UPDATE … WHERE <columns differ>` guard (so unchanged rows write nothing),
+  then only rows that vanished upstream are deleted. D1 writes per sync scale with
+  actual churn, not fleet size — a no-change sync costs ~0 writes, which keeps the
+  6-hourly refresh cheap even for large tenants. (Devices upsert on a unique
+  `agent_id` index; the other tables on their integer primary key.)
 
 ## Security
 
