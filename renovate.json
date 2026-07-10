@@ -4,5 +4,11 @@
     "config:recommended",
     ":pinAllExceptPeerDependencies"
   ],
-  "rangeStrategy": "pin"
+  "rangeStrategy": "pin",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["* 0-5 * * *"],
+    "automerge": true,
+    "commitMessageAction": "Refresh lock file"
+  }
 }
