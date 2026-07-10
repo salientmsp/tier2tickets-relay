@@ -1002,6 +1002,38 @@ async function postDeadLetter(
 }
 
 /**
+ * The mirror-refresh sync failing is a silent-degradation risk (stale lookups →
+ * mis-routed tickets), so alert via notifly when it does. No-op when NOTIFLY_URLS
+ * is unset. notify() never throws; per-destination failures are logged.
+ */
+export async function postSyncFailure(
+  env: Env,
+  info: { source: string; error: string },
+): Promise<void> {
+  const urls = notiflyUrls(env);
+  if (!urls.length) return;
+  const results = await notify(
+    { urls },
+    {
+      title: "⚠️ Gorelo → D1 mirror sync failed",
+      body: [
+        `Source: ${info.source}`,
+        `Error: ${info.error}`,
+        "",
+        "The D1 mirror was not refreshed; lookups may serve stale data until the next successful sync.",
+      ].join("\n"),
+      type: "failure",
+    },
+  );
+  const failed = results.filter((r) => !r.success);
+  if (failed.length) {
+    console.error(
+      `sync-failure notify errors: ${failed.map((f) => `${f.service}:${f.error ?? "?"}`).join("; ")}`,
+    );
+  }
+}
+
+/**
  * Send a test alert through the real notifly path so the wiring can be verified on
  * demand (POST /admin/test-webhook), returning the per-destination results.
  */
@@ -1097,7 +1129,10 @@ async function ensureSynced(env: Env): Promise<void> {
   await initSchema(env.DB);
   if (!(await getLastSync(env.DB))) {
     console.log("HALO: no last_sync — running inline bootstrap sync");
-    await syncAll(env).catch((err) => console.error("HALO bootstrap sync failed", String(err)));
+    await syncAll(env).catch(async (err) => {
+      console.error("HALO bootstrap sync failed", String(err));
+      await postSyncFailure(env, { source: "bootstrap", error: String(err) });
+    });
   }
 }
 

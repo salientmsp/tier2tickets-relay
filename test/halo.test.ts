@@ -523,6 +523,36 @@ describe("Halo deferred ticket create (/tickets queues, /actions creates)", () =
     expect(res.status).toBe(401);
   });
 
+  it("POST /admin/sync alerts via notifly when the sync fails", async () => {
+    // Gorelo fleet fetch is down -> syncAll rejects. Clients resolves so the
+    // Promise.all has a single (handled) rejection, no unhandled-rejection noise.
+    routes.push({
+      method: "GET",
+      match: (u) => u.pathname === "/v1/clients",
+      handler: () => json(200, []),
+    });
+    // 400 is non-retryable, so getJsonWithRetry throws immediately (no backoff).
+    routes.push({
+      method: "GET",
+      match: (u) => u.pathname === "/v1/assets/agents",
+      handler: () => new Response("bad request", { status: 400 }),
+    });
+    let alert: Record<string, unknown> | undefined;
+    routes.push({
+      method: "POST",
+      match: (u) => u.host === "hooks.example.com",
+      handler: async (r) => {
+        alert = (await r.json()) as Record<string, unknown>;
+        return new Response("ok", { status: 200 });
+      },
+    });
+
+    const res = await req("/admin/sync", { method: "POST", headers: { "X-Admin-Key": "test-admin-key" } });
+    expect(res.status).toBe(502);
+    expect(String(alert?.title)).toContain("mirror sync failed");
+    expect(String(alert?.body)).toContain("Source: admin");
+  });
+
   it("re-queues with an incremented attempt when a create fails below the cap", async () => {
     routes.push({
       method: "POST",

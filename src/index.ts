@@ -1,6 +1,6 @@
 import { initSchema } from "./db.js";
 import { GoreloError } from "./gorelo.js";
-import { flushPendingTickets, handleHalo, isHaloRequest, testNotifly } from "./halo.js";
+import { flushPendingTickets, handleHalo, isHaloRequest, postSyncFailure, testNotifly } from "./halo.js";
 import { syncAll } from "./sync.js";
 import type { Env } from "./types.js";
 
@@ -22,10 +22,12 @@ export default {
         const r = await syncAll(env);
         return textResponse(
           200,
-          `ok clients=${r.clients} locations=${r.locations} contacts=${r.contacts} devices=${r.devices}`,
+          `ok clients=${r.clients} locations=${r.locations} contacts=${r.contacts} devices=${r.devices} ` +
+            `changed=${r.changed} deleted=${r.deleted}`,
         );
       } catch (err) {
         console.error("admin sync failed", describeError(err));
+        ctx.waitUntil(postSyncFailure(env, { source: "admin", error: describeError(err) }));
         return textResponse(502, "sync failed");
       }
     }
@@ -70,10 +72,15 @@ export default {
         syncAll(env)
           .then((r) =>
             console.log(
-              `cron sync ok clients=${r.clients} locations=${r.locations} contacts=${r.contacts} devices=${r.devices}`,
+              `cron sync ok clients=${r.clients} locations=${r.locations} contacts=${r.contacts} ` +
+                `devices=${r.devices} changed=${r.changed} deleted=${r.deleted}`,
             ),
           )
-          .catch((err) => console.error("cron sync failed", describeError(err))),
+          .catch(async (err) => {
+            const detail = describeError(err);
+            console.error("cron sync failed", detail);
+            await postSyncFailure(env, { source: "cron", error: detail });
+          }),
       );
       return;
     }

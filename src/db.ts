@@ -95,6 +95,22 @@ export async function initSchema(db: D1Database): Promise<void> {
   } catch {
     // index already exists / column race — fine
   }
+  // Delta sync upserts devices with ON CONFLICT(agent_id), which needs a UNIQUE
+  // index as the conflict target. The old full-rebuild produced one row per agent
+  // so duplicates shouldn't exist, but dedupe first (keep the lowest rowid per
+  // agent_id) so the unique index can be created even on a legacy table.
+  try {
+    await db
+      .prepare(`DELETE FROM devices WHERE rowid NOT IN (SELECT MIN(rowid) FROM devices GROUP BY agent_id)`)
+      .run();
+  } catch {
+    // nothing to dedupe / build doesn't expose rowid — fine
+  }
+  try {
+    await db.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_agent_id ON devices (agent_id)`).run();
+  } catch {
+    // index already exists / residual duplicate — fine
+  }
   // Additive migration: attempts counter on an older pending_tickets table.
   try {
     await db.prepare(`ALTER TABLE pending_tickets ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`).run();
