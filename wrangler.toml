@@ -68,7 +68,7 @@ EMERGENCY_PRIORITY = "1"
 # never sends it. "true" sends it ONLY when the Worker resolved a real client contact
 # — a press that falls back to the catch-all client (no contact match) never triggers
 # the email, so it can't notify the wrong party.
-SEND_TICKET_CREATED_EMAIL = "false"
+SEND_TICKET_CREATED_EMAIL = "true"
 
 # Verbose logging toggle. "false" (default) logs only non-PII breadcrumbs (method/path/
 # status + resolved ids). Set "true" to log full HALO CAPTURE/RESPONSE bodies — which
