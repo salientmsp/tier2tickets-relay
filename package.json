@@ -12,13 +12,13 @@
     "test:watch": "vitest"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.18.2",
-    "@cloudflare/workers-types": "^5.0.0",
-    "typescript": "^7.0.2",
-    "vitest": "^4.1.10",
+    "@cloudflare/vitest-pool-workers": "0.18.2",
+    "@cloudflare/workers-types": "4.20260702.1",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10",
     "wrangler": "4.107.1"
   },
   "dependencies": {
-    "@ambersecurityinc/notifly": "^0.6.0"
+    "@ambersecurityinc/notifly": "0.6.0"
   }
 }
