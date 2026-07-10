@@ -260,6 +260,37 @@ describe("syncAll delta reconcile (inline tables + location fan-out)", () => {
   });
 });
 
+describe("GET /admin/status", () => {
+  async function status(headers?: Record<string, string>): Promise<Response> {
+    const ctx = createExecutionContext();
+    const res = await worker.fetch(new Request("https://t2t.example.com/admin/status", { headers }), env, ctx);
+    await waitOnExecutionContext(ctx);
+    return res;
+  }
+
+  it("requires the admin key", async () => {
+    expect((await status()).status).toBe(401);
+  });
+
+  it("reports mirror counts and location-queue drain progress", async () => {
+    await syncAll(makeQueue().env); // enqueues 1 location message, stamps enqueued_at
+    await runConsumer([10]); // consumer reconciles client 10, stamps synced_at
+
+    const res = await status({ "X-Admin-Key": "test-admin-key" });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      mirror: { clients: number; locations: number; contacts: number; devices: number };
+      lastSync: string | null;
+      locationQueue: { enqueued: number | null; drained: boolean };
+    };
+    expect(body.mirror).toMatchObject({ clients: 1, contacts: 1, devices: 1 });
+    expect(body.mirror.locations).toBe(1); // consumer wrote client 10's site
+    expect(body.lastSync).toBeTruthy();
+    expect(body.locationQueue.enqueued).toBe(1);
+    expect(body.locationQueue.drained).toBe(true); // consumer ran after the enqueue
+  });
+});
+
 describe("location queue consumer", () => {
   it("fetches and upserts a client's sites, then acks", async () => {
     data.locations[10] = [{ id: 100, name: "HQ" }, { id: 101, name: "Annex" }];

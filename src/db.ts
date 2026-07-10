@@ -374,11 +374,42 @@ export async function getLastSync(db: D1Database): Promise<string | null> {
 }
 
 export async function setLastSync(db: D1Database, iso: string): Promise<void> {
+  await setSyncMeta(db, "last_sync", iso);
+}
+
+/** Read an arbitrary sync_meta value (null if unset). */
+export async function getSyncMeta(db: D1Database, key: string): Promise<string | null> {
+  const row = await db
+    .prepare(`SELECT value FROM sync_meta WHERE key = ? LIMIT 1`)
+    .bind(key)
+    .first<{ value: string }>();
+  return row ? row.value : null;
+}
+
+/** Upsert an arbitrary sync_meta value. */
+export async function setSyncMeta(db: D1Database, key: string, value: string): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO sync_meta (key, value) VALUES ('last_sync', ?)
+      `INSERT INTO sync_meta (key, value) VALUES (?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     )
-    .bind(iso)
+    .bind(key, value)
     .run();
+}
+
+/** Row counts for the mirrored tables (for the admin status endpoint). */
+export async function mirrorCounts(
+  db: D1Database,
+): Promise<{ clients: number; locations: number; contacts: number; devices: number }> {
+  const one = async (table: string): Promise<number> => {
+    const row = await db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>();
+    return row?.n ?? 0;
+  };
+  const [clients, locations, contacts, devices] = await Promise.all([
+    one("clients"),
+    one("locations"),
+    one("contacts"),
+    one("devices"),
+  ]);
+  return { clients, locations, contacts, devices };
 }

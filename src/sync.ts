@@ -1,4 +1,4 @@
-import { initSchema, setLastSync } from "./db.js";
+import { initSchema, setLastSync, setSyncMeta } from "./db.js";
 import { GoreloClient } from "./gorelo.js";
 import { normalizeHost } from "./parse.js";
 import type {
@@ -219,7 +219,12 @@ export async function syncAll(env: Env): Promise<SyncStats> {
     if (part.length) await env.SYNC_QUEUE.sendBatch(part);
   }
 
-  await setLastSync(env.DB, new Date().toISOString());
+  const now = new Date().toISOString();
+  await setLastSync(env.DB, now);
+  // Bookkeeping for the admin status endpoint: how many location messages this
+  // run enqueued and when, so it can be compared against the consumer's progress.
+  await setSyncMeta(env.DB, "locations_enqueued", String(messages.length));
+  await setSyncMeta(env.DB, "locations_enqueued_at", now);
   const locations = await countRows(env.DB, "locations");
   return {
     clients: clientStats.total,

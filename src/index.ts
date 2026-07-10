@@ -1,4 +1,4 @@
-import { initSchema } from "./db.js";
+import { getLastSync, getSyncMeta, initSchema, mirrorCounts, setSyncMeta } from "./db.js";
 import { GoreloClient, GoreloError } from "./gorelo.js";
 import { flushPendingTickets, handleHalo, isHaloRequest, postSyncFailure, testNotifly } from "./halo.js";
 import { reconcileClientLocations, syncAll } from "./sync.js";
@@ -10,6 +10,12 @@ const SYNC_CRON = "0 */6 * * *";
 
 const textResponse = (status: number, body: string): Response =>
   new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
+
+const jsonResponse = (status: number, body: unknown): Response =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -31,6 +37,33 @@ export default {
         ctx.waitUntil(postSyncFailure(env, { source: "admin", error: describeError(err) }));
         return textResponse(502, "sync failed");
       }
+    }
+
+    // Admin: sync + location-queue status (ADMIN_KEY). Lets you "follow" the
+    // location fan-out — compare when work was last enqueued vs. when the consumer
+    // last ran, alongside current mirror row counts.
+    if (request.method === "GET" && url.pathname === "/admin/status") {
+      if (!adminKeyOk(request, env)) return textResponse(401, "unauthorized");
+      await initSchema(env.DB);
+      const [counts, lastSync, enqueued, enqueuedAt, syncedAt] = await Promise.all([
+        mirrorCounts(env.DB),
+        getLastSync(env.DB),
+        getSyncMeta(env.DB, "locations_enqueued"),
+        getSyncMeta(env.DB, "locations_enqueued_at"),
+        getSyncMeta(env.DB, "locations_synced_at"),
+      ]);
+      // Heuristic: the consumer has caught up if it ran at/after the last enqueue.
+      const drained = enqueuedAt != null && syncedAt != null && syncedAt >= enqueuedAt;
+      return jsonResponse(200, {
+        mirror: counts,
+        lastSync,
+        locationQueue: {
+          enqueued: enqueued != null ? Number(enqueued) : null,
+          enqueuedAt,
+          lastConsumerRunAt: syncedAt,
+          drained,
+        },
+      });
     }
 
     // Admin: fire a test alert through the notifly dead-letter path (ADMIN_KEY).
@@ -119,6 +152,8 @@ export default {
         msg.retry();
       }
     }
+    // Stamp progress for /admin/status (once per batch, not per message).
+    await setSyncMeta(env.DB, "locations_synced_at", new Date().toISOString());
   },
 } satisfies ExportedHandler<Env, SyncLocationsMessage>;
 

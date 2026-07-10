@@ -110,7 +110,8 @@ Configure Tier2 as a **HaloPSA — Cloud Hosted** integration:
 | Method & path | Auth | Purpose |
 |---|---|---|
 | `POST /token`, `/users`, `/client`, `/site`, `/asset`, `/tickets`, `/actions`, … | OAuth2 client_credentials + IP allowlist (routed by the `halo-app-name` header) | HaloPSA mock (see below) |
-| `POST /admin/sync` | `X-Admin-Key` / `X-API-Key` / `Authorization: Bearer` = `<ADMIN_KEY>` | Rebuild the D1 mirror on demand |
+| `POST /admin/sync` | `X-Admin-Key` / `X-API-Key` / `Authorization: Bearer` = `<ADMIN_KEY>` | Refresh the D1 mirror on demand (fans location fetches out to the queue) |
+| `GET /admin/status` | `ADMIN_KEY` (same as `/admin/sync`) | JSON: mirror row counts, `lastSync`, and location-queue progress (`enqueued` / `enqueuedAt` / `lastConsumerRunAt` / `drained`) — follow the location fan-out |
 | `POST /admin/test-webhook` | `ADMIN_KEY` (same as `/admin/sync`) | Fire a test alert through the dead-letter webhook and report its HTTP status |
 | `GET`/`HEAD` `/health` | none | Liveness check (accepts `HEAD` for uptime monitors) |
 
@@ -253,7 +254,10 @@ Gorelo's agent/client lists have no server-side filters, so they're mirrored int
   `locationsQueued`, and `complete` (bulk fetches succeeded). All are logged by the
   cron; the `POST /admin/sync` response echoes the counts plus `locations_queued=N`
   and appends `(partial: …)` when the contacts fetch failed. The queue consumer
-  logs per-client `changed`/`deleted`.
+  logs per-client `changed`/`deleted`. To **follow the location fan-out**: `GET
+  /admin/status` (mirror counts + `enqueued`/`lastConsumerRunAt`/`drained`),
+  `wrangler tail` for live consumer logs, or the Cloudflare dashboard → Queues →
+  `tier2tickets-sync` for backlog/throughput.
 - **Failure alerts** — if a sync throws (cron, `POST /admin/sync`, or the lazy
   bootstrap), it fires the configured notifly webhook(s) (`NOTIFLY_URLS`, the same
   path as dead-letter alerts) so a stale mirror doesn't degrade silently. No-op
