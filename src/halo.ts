@@ -99,6 +99,12 @@ export function isHaloPath(pathname: string): boolean {
 
 /** True if this request is a Halo call (header first, then path shape). */
 export function isHaloRequest(request: Request, pathname: string): boolean {
+  // `/admin/*` and `/health` are handled explicitly by the fetch router and must
+  // NOT fall through to the IP-gated Halo mock — some admin paths collide with a
+  // Halo resource name (e.g. `/admin/status` normalizes to the `status` resource),
+  // which otherwise routes an admin call into Halo and rejects it on the IP
+  // allowlist. Unknown paths here should 404, not masquerade as Halo.
+  if (pathname.startsWith("/admin/") || pathname === "/health") return false;
   return request.headers.get(HALO_HEADER) != null || isHaloPath(pathname);
 }
 

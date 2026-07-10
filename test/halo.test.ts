@@ -1,7 +1,7 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index.js";
-import { flushPendingTickets, haloResource, isHaloPath } from "../src/halo.js";
+import { flushPendingTickets, haloResource, isHaloPath, isHaloRequest } from "../src/halo.js";
 import { initSchema } from "../src/db.js";
 import { assetNum } from "../src/sync.js";
 
@@ -93,6 +93,19 @@ describe("isHaloPath / haloResource", () => {
     expect(haloResource("/users")).toBe("users");
     expect(haloResource("/api/Users/123")).toBe("users");
     expect(haloResource("/token")).toBe("token");
+  });
+  it("never routes /admin/* or /health to Halo, even when the resource name collides", () => {
+    // /admin/status normalizes to the `status` resource, which IS a Halo resource
+    // — but admin/health paths are handled by the fetch router, so isHaloRequest
+    // must exclude them so they don't hit the IP-gated Halo mock.
+    expect(haloResource("/admin/status")).toBe("status");
+    expect(isHaloPath("/admin/status")).toBe(true); // collides at the path level
+    const req = (p: string): Request => new Request(`https://t2t.example.com${p}`);
+    expect(isHaloRequest(req("/admin/status"), "/admin/status")).toBe(false);
+    expect(isHaloRequest(req("/admin/sync"), "/admin/sync")).toBe(false);
+    expect(isHaloRequest(req("/health"), "/health")).toBe(false);
+    // A real Halo path still routes via the path fallback (no header needed).
+    expect(isHaloRequest(req("/users"), "/users")).toBe(true);
   });
 });
 
