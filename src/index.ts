@@ -46,8 +46,9 @@ export default {
       );
     }
 
-    // Lightweight health check (no secrets).
-    if (request.method === "GET" && url.pathname === "/health") {
+    // Lightweight health check (no secrets). Accept HEAD too — most uptime
+    // monitors probe with HEAD, which must not fall through to the 404 below.
+    if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/health") {
       return textResponse(200, "ok");
     }
 

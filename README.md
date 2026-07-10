@@ -107,7 +107,7 @@ Configure Tier2 as a **HaloPSA — Cloud Hosted** integration:
 | `POST /token`, `/users`, `/client`, `/site`, `/asset`, `/tickets`, `/actions`, … | OAuth2 client_credentials + IP allowlist (routed by the `halo-app-name` header) | HaloPSA mock (see below) |
 | `POST /admin/sync` | `X-Admin-Key` / `X-API-Key` / `Authorization: Bearer` = `<ADMIN_KEY>` | Rebuild the D1 mirror on demand |
 | `POST /admin/test-webhook` | `ADMIN_KEY` (same as `/admin/sync`) | Fire a test alert through the dead-letter webhook and report its HTTP status |
-| `GET /health` | none | Liveness check |
+| `GET`/`HEAD` `/health` | none | Liveness check (accepts `HEAD` for uptime monitors) |
 
 Anything else returns `404`.
 

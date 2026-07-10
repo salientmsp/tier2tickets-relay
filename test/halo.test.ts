@@ -96,6 +96,18 @@ describe("isHaloPath / haloResource", () => {
   });
 });
 
+describe("health check", () => {
+  it("returns 200 for GET /health", async () => {
+    const res = await req("/health", { method: "GET" });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("ok");
+  });
+  it("returns 200 for HEAD /health (uptime monitors probe with HEAD)", async () => {
+    const res = await req("/health", { method: "HEAD" });
+    expect(res.status).toBe(200);
+  });
+});
+
 describe("Halo OAuth token", () => {
   const token = (client_secret: string): RequestInit => ({
     method: "POST",
