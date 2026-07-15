@@ -11,6 +11,11 @@ export default defineConfig({
         bindings: {
           GORELO_BASE_URL: "https://api.usw.gorelo.io",
           ENFORCE_IP_ALLOWLIST: "false",
+          // Keep the token gate off by default in tests so resource-endpoint specs
+          // don't need to mint a bearer token. Production sets this in wrangler.toml
+          // (currently "enforce"); the dedicated enforcement specs override the mode
+          // per-test via env.HALO_TOKEN_ENFORCE, so all three modes are still covered.
+          HALO_TOKEN_ENFORCE: "off",          
           DEFAULT_GROUP_ID: "7",
           DEFAULT_TYPE_ID: "3",
           DEFAULT_STATUS_ID: "1",
