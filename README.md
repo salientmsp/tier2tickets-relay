@@ -1,19 +1,33 @@
-# tier2tickets-relay
+# gorelo-haloapi-relay
 
-A Cloudflare Worker that **impersonates a HaloPSA/ITSM instance** so that
-**Tier2Tickets / Helpdesk Buttons** can create tickets in **Gorelo** — a PSA that
-Tier2 does not natively support.
+A Cloudflare Worker that **impersonates a HaloPSA/ITSM instance** so that products
+with a **HaloPSA integration** can create tickets in **Gorelo** — a PSA those
+products don't natively support. It speaks the Halo API dialect on the front and
+the Gorelo API on the back, translating between them.
 
-On each button press Tier2 runs its Halo integration against the Worker: it
-authenticates (OAuth2), looks up the user / company / site / asset, creates the
-ticket, then posts the report as a follow-up note. The Worker answers those
-lookups from a **D1 mirror of Gorelo** and maps the create back to a real Gorelo
-ticket — resolving the correct client, contact and asset, then packing the report,
-device details and HDB portal links into the ticket body.
+> Formerly `tier2tickets-relay` (Tier2Tickets / Helpdesk Buttons was the first and
+> original product). It now fronts **multiple** Halo-integration products, so the
+> name is generic; Tier2 wording below is kept where a behavior is Tier2-specific.
+
+**Supported products** (each gated + handled independently — see [Products](#products)):
+
+| Product | Source | Ticket create |
+|---|---|---|
+| **Tier2Tickets / Helpdesk Buttons** | 2 fixed IPs | two-step: `POST /tickets` then a `/actions` note (**deferred** create) |
+| **Huntress** | its source IPs/CIDRs + `User-Agent: Huntress Halo Integration` | one-shot: everything in `POST /api/Tickets` (**immediate** create) |
+
+A product runs its Halo integration against the Worker: it authenticates (OAuth2),
+looks up the user / company / site / asset, and creates the ticket. The Worker
+answers those lookups from a **D1 mirror of Gorelo** and maps the create back to a
+real Gorelo ticket — resolving the correct client, contact and asset, then packing
+the report/details into the ticket body. The Halo lookup responses are shaped
+faithfully to the real Halo API (envelopes + full objects, derived from
+[`docs/halo-swagger.v2.json`](docs/halo-swagger.v2.json)) so a strict Halo client
+doesn't choke on them.
 
 > An earlier version also mocked **osTicket** (create-only). That path has been
 > removed — Halo is the sole integration, because it's the only one that lets
-> Tier2 do the PSA lookups (contact/company/asset matching) we need.
+> these products do the PSA lookups (contact/company/asset matching) we need.
 
 ## How it works
 
@@ -28,11 +42,11 @@ Helpdesk Buttons ──Halo API (OAuth + lookups + create + note)──▶  Work
 Cron (every 6h) / POST /admin/sync / first-call bootstrap ──▶ syncAll() delta-reconciles the D1 mirror
 ```
 
-- Tier2 sends every Halo call with a `halo-app-name` header (and unprefixed
-  lowercase paths like `/token`, `/users`, `/tickets`), which is how the Worker
-  routes them.
-- The Worker **always** returns decodable JSON — Tier2's Halo client fails hard on
-  any non-JSON body, so every handler is wrapped to emit JSON even on error.
+- Requests are recognized as Halo calls by the `halo-app-name` header (Tier2) **or**
+  the path shape (`/token`, `/users`, `/tickets`, or the `/api/*` forms Huntress
+  uses) — no header required for the path form.
+- The Worker **always** returns decodable JSON — a Halo client fails hard on any
+  non-JSON body, so every handler is wrapped to emit JSON even on error.
 - On a Gorelo create failure the `/actions` call returns **502** (with the upstream
   status) so Tier2 surfaces a failure instead of silently dropping the ticket.
 
@@ -41,13 +55,15 @@ Cron (every 6h) / POST /admin/sync / first-call bootstrap ──▶ syncAll() de
 | Path | Purpose |
 |---|---|
 | `src/index.ts` | `fetch` + `scheduled` handlers, routing (admin/health/Halo) |
-| `src/halo.ts` | the HaloPSA mock — token, lookups, deferred create, report parsing |
+| `src/halo.ts` | the HaloPSA mock — token, lookups, per-product create, report parsing |
+| `src/products.ts` | product registry (`PRODUCTS`, IPs/CIDRs, `ENABLE_*`, UA gate, `matchProduct`, `ipAllowed`) |
+| `src/haloShapes.ts` | full Halo config-item shapes (status/type/priority/team), field lists derived from the swagger |
 | `src/gorelo.ts` | Gorelo API client (retry/backoff, defensive parsing) |
 | `src/sync.ts` | `syncAll()` — rebuild the D1 mirror off the request path |
 | `src/db.ts` | D1 schema + point lookups (+ the deferred-ticket queue) |
 | `src/parse.ts` | small string normalizers (`normalizeHost`, `normalizeEmail`) |
-| `src/tier2.ts` | Tier2 source-IP allowlist |
 | `src/types.ts` | `Env` + hand-written subset of Gorelo API types |
+| `docs/halo-swagger.v2.json` | the real HaloPSA OpenAPI spec — reference for shaping mock responses |
 | `migrations/0001_init.sql` | D1 schema (also self-created at runtime) |
 | `scripts/gorelo-ids.sh` | dump groups/types/statuses/clients to fill the vars |
 | `test/` | vitest specs (`@cloudflare/vitest-pool-workers`) |
@@ -110,7 +126,7 @@ Configure Tier2 as a **HaloPSA — Cloud Hosted** integration:
 
 | Method & path | Auth | Purpose |
 |---|---|---|
-| `POST /token`, `/users`, `/client`, `/site`, `/asset`, `/tickets`, `/actions`, … | IP allowlist (enforced by default) + optional bearer-token gate — see [Security](#security); routed by the `halo-app-name` header | HaloPSA mock (see below) |
+| `/token`, `/users`, `/client`, `/site`, `/asset`, `/tickets`, `/actions`, … (and `/api/*` forms) | product allowlist (enforced by default) + optional bearer-token gate — see [Security](#security); recognized by the `halo-app-name` header or the path shape | HaloPSA mock (see below) |
 | `POST /admin/sync` | `X-Admin-Key` / `X-API-Key` / `Authorization: Bearer` = `<ADMIN_KEY>` | Refresh the D1 mirror on demand (fans location fetches out to the queue) |
 | `GET /admin/status` | `ADMIN_KEY` (same as `/admin/sync`) | Pretty JSON: mirror row counts, `lastSync`, and `locationQueue` (`queued` / `drained` / `lagSeconds`) — follow the location fan-out |
 | `POST /admin/test-webhook` | `ADMIN_KEY` (same as `/admin/sync`) | Fire a test alert through the dead-letter webhook and report its HTTP status |
@@ -121,22 +137,38 @@ naming the right one (not a misleading `404`). Anything else returns `404`.
 
 ## HaloPSA/ITSM mock (`src/halo.ts`)
 
-| Tier2 call | Worker response |
+Lookup responses mirror the **real Halo API shapes** (`docs/halo-swagger.v2.json`):
+list endpoints use the `*_View` **paging envelope** (`page_no`/`page_size`/`record_count`/
+`columns` + the entity array) and config lookups return **bare arrays of full objects**
+— a strict Halo client (Huntress) deref's many fields and paginates, so thin
+`{id,name}` responses crash it.
+
+| Halo call | Worker response |
 |---|---|
 | `POST /token` (client_credentials) | validates `HALO_CLIENT_ID/SECRET` (if set) and returns a bearer token — a signed HMAC token when creds are set, else an opaque one. Enforcement on the endpoints below is governed by `HALO_TOKEN_ENFORCE` (see [Security](#security)) |
-| `GET /users?search={email}` | the Gorelo **contact** (id/name/email/client/site); the `unregistered@helpdeskbuttons.com` catch-all maps to `CATCHALL_CLIENT_ID` |
-| `GET /client` / `GET /site` | Gorelo **clients** / **locations** from the mirror |
-| `GET /asset?search={hostname}` | the Gorelo **agent/device** (numeric surrogate id ↔ agent UUID) |
-| `GET /tickettype\|status\|team\|priority\|agent` | minimal default lists (from env) |
-| `POST /tickets` | builds the Gorelo command and **queues** it (keyed by the Halo id returned); does NOT create the ticket yet |
-| `POST /actions` | folds the report links into the queued command, then **creates** the Gorelo ticket (correlated by explicit `ticket_id`, else the ticket number parsed from the note text) |
+| `GET /users?search={email}` | the Gorelo **contact** (id/name/email/client/site) in the `Users_View` envelope; the `unregistered@helpdeskbuttons.com` catch-all maps to `CATCHALL_CLIENT_ID` |
+| `GET /client` / `GET /site` | Gorelo **clients** / **locations** from the mirror (`Area_View` / `Site_View` envelope) |
+| `GET /client/{id}` | a **single** Halo `Area` object (not the list envelope) — name from the mirror, synthesized for an unmirrored id (e.g. the catch-all) |
+| `GET /asset?search={hostname}` | the Gorelo **agent/device** (numeric surrogate id ↔ agent UUID) in the `Device_View` envelope |
+| `GET /tickettype\|status\|team\|priority` | **full-shape** bare arrays (`src/haloShapes.ts`); `status` returns an open→closed set so a PSA editor's closed-status mapping resolves |
+| `POST /tickets` (or `/api/Tickets`) | build the Gorelo command, then create **per product** (below). Accepts a single object or a Halo-style array |
+| `POST /actions` | folds the report links into the queued command, then **creates** the Gorelo ticket (Tier2 two-step path) |
 
-**Deferred create:** Tier2 posts the ticket, then posts the report/notification as a
-separate `/actions` note. Gorelo has no ticket-append endpoint, so the `/tickets`
-call queues the command in `pending_tickets` and the `/actions` call creates the
-single Gorelo ticket. A press whose note never arrives is created by an orphan
-flush (the `*/5 * * * *` cron, plus an opportunistic sweep off live requests)
-after `PENDING_GRACE_MS`. A command that keeps failing to create is **dead-lettered**
+**Per-product create** (branched on `matchProduct`, `src/products.ts`):
+
+- **Deferred (Tier2, `deferCreate: true`):** Tier2 posts the ticket, then the report as
+  a separate `/actions` note. Gorelo has no ticket-append endpoint, so `/tickets` queues
+  the command in `pending_tickets` and the `/actions` note creates the single Gorelo
+  ticket. A press whose note never arrives is created by an orphan flush (the
+  `*/5 * * * *` cron, plus an opportunistic sweep off live requests) after
+  `PENDING_GRACE_MS`.
+- **Immediate (Huntress, `deferCreate: false`):** the whole ticket arrives in the one
+  POST and there's no follow-up note, so the Gorelo ticket is created **right away**
+  (falling back to the pending queue if that call fails, so the orphan flush retries).
+  The submitter name and body heading are product-aware (Huntress → `"Huntress"` /
+  `"Details"` instead of the HDB `"Helpdesk Buttons"` / `"Report Summary"`).
+
+**Dead-letter (both paths):** a command that keeps failing to create is **dead-lettered**
 (logged + dropped) after `MAX_PENDING_ATTEMPTS`, so it can't retry forever — and if
 `NOTIFLY_URLS` is set, an alert is sent via [notifly](https://github.com/ambersecurityinc/notifly)
 (Apprise-style URLs — ntfy / Teams / Slack / Discord / email / …) with the ticket
@@ -166,21 +198,24 @@ Report** link (screenshots/diagnostics). The routing outcome is logged, not show
 **Priority:** a press flagged "This is an emergency" is created at `EMERGENCY_PRIORITY`
 (else `DEFAULT_PRIORITY`).
 
-**Known limitation — the ticket number shown to the user is not the Gorelo ticket
-number.** The "ticket number" on the HDB "Help Data Delivered" confirmation screen is
-a synthetic id the Worker mints and returns on `POST /tickets` (the `haloId` in
-`src/halo.ts` — a surrogate of a random UUID). It is **not** the ticket number Gorelo
-assigns. This is unavoidable today: the create is deferred (the real Gorelo ticket
-isn't created until the `/actions` note arrives), and even on create Gorelo's `POST
-/v1/tickets` returns only `{ "ticketId": "<uuid>" }` — no human-readable ticket number,
-and there is no GET-ticket / list-tickets endpoint to read one back. So Tier2 has
-nothing real to display and the Worker hands it a placeholder to correlate the note.
-Gorelo has indicated an API update exposing the created ticket number is expected
-within ~a month; once available, the Worker can return the real number instead of the
-surrogate. The Gorelo-side ticket itself is created correctly — only the number echoed
-back to the end user is a placeholder. Tracked in
-[#35](https://github.com/salientmsp/tier2tickets-relay/issues/35) (fix pending the
-Gorelo API update).
+**Known limitation — the ticket number echoed back is not the Gorelo ticket
+number.** For **every** product, the create response returns a synthetic id — the
+`haloId` in `src/halo.ts`, a surrogate of a random UUID — **not** the number Gorelo
+assigns. So anything that shows or checks it (Tier2's "Help Data Delivered" screen,
+Huntress's ticket link) gets the random mock, never a real number. Why:
+- Gorelo's `POST /v1/tickets` returns only `{ "ticketId": "<uuid>" }` — an internal
+  id, **no** human-readable ticket number — and there's no GET-ticket / list-tickets
+  endpoint to read a number back or to *check* a ticket afterward.
+- For deferred products (Tier2) the real Gorelo ticket isn't even created until the
+  `/actions` note arrives, so there's nothing to return at `POST /tickets` time.
+
+The immediate path (Huntress) creates the ticket in-line but still only receives that
+`ticketId` uuid — not a displayable number — and returns the `haloId` mock regardless,
+so both products are in the same spot. Gorelo has indicated an API update exposing the
+created ticket number is expected within ~a month; a full fix also needs a
+`GET /api/Tickets/{id}` that resolves the real ticket to check it. The Gorelo-side
+ticket itself is created correctly — only the number echoed back is a placeholder.
+Tracked in [#35](https://github.com/salientmsp/tier2tickets-relay/issues/35).
 
 **Requester email:** Gorelo's "ticket created" email is suppressed by default
 (`sendTicketCreatedEmail=false`). Set `SEND_TICKET_CREATED_EMAIL=true` to enable it —
@@ -210,6 +245,53 @@ endpoint, so linking is the only way to reach that content from a ticket.
 resolved ids in the `HALO routing:` line). Set `DEBUG_LOGS=true` to log full
 `HALO CAPTURE` / `HALO RESPONSE` bodies (which contain PII/PHI — names, emails,
 phones) for a short debugging window, then turn it back off.
+
+## Products
+
+Each upstream product is a `Product` entry in the `PRODUCTS` registry
+(`src/products.ts`):
+
+```ts
+interface Product {
+  key: string;              // "tier2" | "huntress"
+  label: string;
+  enableVar: keyof Env;     // ENABLE_TIER2 | ENABLE_HUNTRESS
+  defaultEnabled: boolean;  // value when the flag is unset (tier2 on, huntress off)
+  ips: Set<string>;         // exact source IPs
+  cidrs: string[];          // IPv4 CIDR ranges
+  userAgent?: string;       // optional UA second gate (IP AND UA when set)
+  deferCreate: boolean;     // true = two-step /tickets+/actions; false = immediate
+  ticketCreatedBy: string;  // submitter-name fallback
+  ticketBodyHeading: string;// heading over the pasted ticket body
+}
+```
+
+`matchProduct(request, env)` is the seam: it returns which **enabled** product a
+request's IP (+ UA) belongs to, and the create path and body-building branch on it.
+Gating and per-product create are covered under [Security](#security) and the
+[mock](#halopsaitsm-mock-srchalots) above.
+
+**Onboarding a new product:**
+
+1. Add a `Product` to `PRODUCTS` (its IPs/CIDRs, an `ENABLE_<KEY>` flag with
+   `defaultEnabled: false`, and — if it self-identifies — a `userAgent`).
+2. Declare the flag on `Env` (`src/types.ts`) and in `wrangler.toml [vars]`.
+3. Capture a real request (`DEBUG_LOGS=true` briefly) and, if its ticket payload or
+   lookups differ from Tier2's, branch the handling on the matched product. Shape any
+   new Halo responses against `docs/halo-swagger.v2.json` (list endpoints need the
+   `*_View` paging envelope; config lookups need full objects, not `{id,name}`).
+4. Flip `ENABLE_<KEY>="true"` when ready.
+
+> **Single Halo credentials (planned: per-product):** `HALO_CLIENT_ID`/
+> `HALO_CLIENT_SECRET` are one pair for the whole Worker. With them set and
+> `HALO_TOKEN_ENFORCE="enforce"`, only tokens minted for *that* client validate — so
+> multiple products with **different** OAuth credentials can't all pass token
+> enforcement at once (e.g. Huntress authenticates with a different `client_id` than
+> Tier2). **Interim:** run `HALO_TOKEN_ENFORCE` at `off`/`observe`, or leave the Halo
+> OAuth secrets unset (any credentials accepted) — do **not** run `enforce` with the
+> secrets set while more than one product is enabled. Moving to per-product
+> credentials is planned work — tracked in
+> [#51](https://github.com/00o-sh/gorelo-haloapi-relay/issues/51).
 
 ## Data store & refresh
 
@@ -267,12 +349,22 @@ Gorelo's agent/client lists have no server-side filters, so they're mirrored int
 
 ## Security
 
-- **IP allowlist (fails closed):** the allowlist is **ENFORCED by default** — only
-  Tier2's two fixed source IPs (`34.202.14.153`, `3.209.57.193`, via
-  `CF-Connecting-IP`) may reach the Halo mock. It is disabled **only** by an
-  explicit, normalized `ENFORCE_IP_ALLOWLIST` of `false`, `0`, or empty; an unset
-  var, `true`, or any other value enforces. An absent `CF-Connecting-IP` header
-  also fails closed.
+- **Product allowlist (fails closed):** the allowlist is **ENFORCED by default** —
+  only the source IPs (and CIDR ranges) of the **enabled products** may reach the
+  Halo mock, matched on `CF-Connecting-IP`. Products live in the `PRODUCTS` registry
+  (`src/products.ts`), each with its exact IPs/CIDRs, an `ENABLE_<PRODUCT>` toggle,
+  and an optional **User-Agent second gate** (a request must match the product's IP
+  **and**, when set, its `User-Agent` — IP is always required, so UA only tightens,
+  never widens; Huntress requires `Huntress Halo Integration`). `matchProduct()`
+  returns which enabled product a request came from (the hook per-product handling
+  branches on); `ipAllowed()` is a thin wrapper over it.
+  - `ENABLE_TIER2` / `ENABLE_HUNTRESS` (`"true"`/`"false"`): an **unset** flag falls
+    back to the product's built-in default — **tier2 on, huntress off** — so a
+    missing var can't silently flip behavior. If **every** product is disabled the
+    allowlist fails closed (rejects all).
+  - The whole allowlist is disabled **only** by an explicit, normalized
+    `ENFORCE_IP_ALLOWLIST` of `false`, `0`, or empty; an unset var, `true`, or any
+    other value enforces. An absent `CF-Connecting-IP` header also fails closed.
 - **OAuth credentials → token enforcement:** setting `HALO_CLIENT_ID`/`HALO_CLIENT_SECRET`
   makes `/token` validate them **and** mint a signed HMAC-SHA256 bearer token
   (`payload.sig`, keyed by `HALO_CLIENT_SECRET`, with an `exp` claim; Web Crypto,

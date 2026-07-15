@@ -18,11 +18,12 @@ you on a fix and disclosure timeline. There is no bug-bounty program.
 ## Scope
 
 This project is a Cloudflare Worker that impersonates a HaloPSA/ITSM instance so
-Tier2Tickets / Helpdesk Buttons can create tickets in Gorelo. Security-relevant
-surfaces:
+products with a HaloPSA integration (Tier2Tickets / Helpdesk Buttons, Huntress, …)
+can create tickets in Gorelo. Security-relevant surfaces:
 
-- The Halo mock endpoints (`/token`, `/users`, `/tickets`, `/actions`, …) and
-  their IP allowlist + optional bearer-token gate.
+- The Halo mock endpoints (`/token`, `/users`, `/tickets`, `/actions`, `/api/*`, …)
+  and their per-product allowlist (source IP + optional User-Agent gate) + optional
+  bearer-token gate.
 - The admin endpoints (`/admin/*`) gated by `ADMIN_KEY`.
 - Logging (what is and isn't emitted when `DEBUG_LOGS` is off).
 - Handling of secrets (`GORELO_API_KEY`, `ADMIN_KEY`, `NOTIFLY_URLS`, the optional
@@ -36,8 +37,9 @@ controls and how to configure them.
 A security review of this relay identified several findings. The following have
 been remediated (see the README Security section for details and configuration):
 
-- **IP allowlist fails closed** — enforced by default; disabled only by an
-  explicit `false`/`0`/empty value.
+- **Product allowlist fails closed** — enforced by default; only enabled products'
+  source IPs/CIDRs (plus an optional per-product User-Agent gate) may reach the mock.
+  Disabled only by an explicit `ENFORCE_IP_ALLOWLIST` of `false`/`0`/empty.
 - **Bearer-token enforcement** — when the Halo OAuth credentials are set, `/token`
   mints a signed HMAC token and `HALO_TOKEN_ENFORCE` (`off`/`observe`/`enforce`)
   governs whether it is required on the resource endpoints.
