@@ -60,7 +60,7 @@ ENFORCE_IP_ALLOWLIST = "true"
 # still Tier2/Helpdesk-Buttons-shaped, so a newly enabled product needs its own
 # field handling before its requests produce correct Gorelo tickets.
 ENABLE_TIER2 = "true"
-ENABLE_HUNTRESS = "false"
+ENABLE_HUNTRESS = "true"
 
 # --- Gorelo IDs: fill these from scripts/gorelo-ids.sh (values below are from the live Salient tenant) ---
 # groupId / typeId / priorityId / sourceId are NON-NULLABLE on CreatePublicTicketCommand
