@@ -282,11 +282,16 @@ Gating and per-product create are covered under [Security](#security) and the
    `*_View` paging envelope; config lookups need full objects, not `{id,name}`).
 4. Flip `ENABLE_<KEY>="true"` when ready.
 
-> **Single Halo credentials:** `HALO_CLIENT_ID`/`HALO_CLIENT_SECRET` are one pair for
-> the whole Worker. With them set and `HALO_TOKEN_ENFORCE="enforce"`, only tokens
-> minted for *that* client validate — so multiple products with **different** OAuth
-> credentials can't all pass token enforcement at once. Today the design is
-> deliberately single-credential; per-product credentials would be a future change.
+> **Single Halo credentials (planned: per-product):** `HALO_CLIENT_ID`/
+> `HALO_CLIENT_SECRET` are one pair for the whole Worker. With them set and
+> `HALO_TOKEN_ENFORCE="enforce"`, only tokens minted for *that* client validate — so
+> multiple products with **different** OAuth credentials can't all pass token
+> enforcement at once (e.g. Huntress authenticates with a different `client_id` than
+> Tier2). **Interim:** run `HALO_TOKEN_ENFORCE` at `off`/`observe`, or leave the Halo
+> OAuth secrets unset (any credentials accepted) — do **not** run `enforce` with the
+> secrets set while more than one product is enabled. Moving to per-product
+> credentials is planned work — tracked in
+> [#51](https://github.com/00o-sh/gorelo-haloapi-relay/issues/51).
 
 ## Data store & refresh
 
