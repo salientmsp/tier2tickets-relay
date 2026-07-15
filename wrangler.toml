@@ -140,5 +140,5 @@ HALO_TOKEN_ENFORCE = "enforce"
 [[d1_databases]]
 binding = "DB"
 database_name = "tier2tickets-relay"
-database_id = "665cd2e1-4c1b-4847-9d40-b2704051218e"
+database_id = "fe2efa6c-f7d4-439b-adfd-3dc10ee0caa5"
 migrations_dir = "migrations"
