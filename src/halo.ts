@@ -95,6 +95,12 @@ export function haloResource(pathname: string): string {
   return segs.length ? segs[segs.length - 1]! : "";
 }
 
+/** Trailing numeric path segment — Halo's `/Client/{id}` etc. — or null. */
+export function trailingId(pathname: string): number | null {
+  const seg = pathname.split("/").filter(Boolean).pop() ?? "";
+  return /^\d+$/.test(seg) ? Number(seg) : null;
+}
+
 /** Fallback path matcher (primary routing is the halo-app-name header). */
 export function isHaloPath(pathname: string): boolean {
   return pathname === "/auth/token" || HALO_RESOURCES.has(haloResource(pathname));
@@ -315,21 +321,30 @@ async function handleUsers(env: Env, url: URL): Promise<Response> {
   return jsonResponse(200, listEnvelope(url, { record_count: users.length, users, user_ids: [] }));
 }
 
+/** One Halo "client" (Area_List-ish) object — the fields our list already exposes. */
+function clientObject(id: number, name: string): Record<string, unknown> {
+  return { id, name, colour: "", inactive: false, toplevel_id: 0, toplevel_name: "", use: "client" };
+}
+
+/**
+ * GET /Client/{id} — Halo returns a SINGLE Area object here (not the list envelope
+ * /Client returns). Huntress fetches its configured/catch-all client this way and
+ * reads fields off the object directly, so returning the list crashes it. Resolve
+ * the name from the mirror; synthesize a bare object if the id isn't mirrored (e.g.
+ * the catch-all client) rather than 404, so a saved config reference still loads.
+ */
+async function handleClientById(env: Env, id: number): Promise<Response> {
+  const name = (await getClientName(env.DB, id)) ?? "";
+  return jsonResponse(200, clientObject(id, name));
+}
+
 async function handleClient(env: Env, url: URL): Promise<Response> {
   const rows = await listClientRows(env.DB, searchTerm(url), pageSize(url));
   // Fuller Halo "client" (Area_List) shape. Tier2's parser was happy with
   // { id, name }, but a stricter Halo client (e.g. Huntress) deserializes each row
   // into a typed model and needs the standard fields present. Extra fields are
   // ignored by simpler consumers, so this stays backward-compatible.
-  const clients = rows.map((c) => ({
-    id: c.id,
-    name: c.name ?? "",
-    colour: "",
-    inactive: false,
-    toplevel_id: 0,
-    toplevel_name: "",
-    use: "client",
-  }));
+  const clients = rows.map((c) => clientObject(c.id, c.name ?? ""));
   // Envelope mirrors Halo's Area_View (docs/halo-swagger.v2.json).
   return jsonResponse(200, listEnvelope(url, { record_count: clients.length, clients }));
 }
@@ -1246,7 +1261,11 @@ async function handleApi(
   }
   if (method === "GET") {
     if (resource === "users") return handleUsers(env, url);
-    if (resource === "client" || resource === "clients") return handleClient(env, url);
+    if (resource === "client" || resource === "clients") {
+      // /Client/{id} -> single Area object; /Client -> the list envelope.
+      const id = trailingId(url.pathname);
+      return id != null ? handleClientById(env, id) : handleClient(env, url);
+    }
     if (resource === "site" || resource === "sites") return handleSite(env, url);
     if (resource === "asset" || resource === "assets") return handleAsset(env, url);
     return handleConfig(env, resource);

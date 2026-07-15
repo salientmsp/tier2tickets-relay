@@ -279,6 +279,18 @@ describe("Halo lookups (Gorelo-backed)", () => {
     });
   });
 
+  it("GET /api/Client/{id} returns a single Area object, not the list envelope", async () => {
+    const j = (await (await req("/api/Client/10")).json()) as Record<string, unknown>;
+    expect(j).toMatchObject({ id: 10, name: "Corp", use: "client" });
+    expect(j.clients).toBeUndefined(); // single object, not the { clients: [...] } envelope
+  });
+
+  it("GET /api/Client/{id} synthesizes a bare object for an unmirrored id (e.g. catch-all)", async () => {
+    const j = (await (await req("/api/Client/99999")).json()) as Record<string, unknown>;
+    expect(j).toMatchObject({ id: 99999, name: "", use: "client" });
+    expect(j.clients).toBeUndefined();
+  });
+
   it("GET /api/Users resolves a contact by email", async () => {
     const res = await req("/api/Users?search=user@corp.com");
     const j = (await res.json()) as { users: Array<Record<string, unknown>> };
