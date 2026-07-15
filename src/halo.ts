@@ -352,6 +352,47 @@ async function handleAsset(env: Env, url: URL): Promise<Response> {
   return jsonResponse(200, { assets, record_count: assets.length });
 }
 
+/**
+ * A full Halo TStatus_List object (docs/halo-swagger.v2.json). Tier2 only reads
+ * id/name, but a stricter Halo client (Huntress) deref's several fields on each
+ * status when building its config editor, so every field is present (defaulted)
+ * to avoid a client-side undefined access. `/Status` is a bare array in Halo.
+ */
+function haloStatus(id: number, name: string): Record<string, unknown> {
+  return {
+    id,
+    guid: "",
+    intent: "",
+    name,
+    shortname: name,
+    type: 0,
+    sequence: id,
+    colour: "",
+    slaaction: "",
+    ticket_count: 0,
+    showonquickchange: true,
+    timeuntilloffhold: 0,
+    statuschangeto: 0,
+    statuschangetofreq: 0,
+    useworkinghours: 0,
+    statusemailfreqdays: 0,
+    statusemailid: 0,
+    statusemail_guid: "",
+    statusnochangehours: 0,
+    nochangehoursrecurring: false,
+    statusnochangehoursmanager: 0,
+    statusnochangehoursmanagerrecurring: false,
+    statusnochangehourssection: 0,
+    statusnochangehourssectionrecurring: false,
+    nochangetemplate: 0,
+    nochangetemplate_guid: "",
+    includeinloadbalance: false,
+    useworkinghours_statusnochangehours: 0,
+    useworkinghours_statusnochangehourssection: 0,
+    useworkinghours_statusnochangehoursmanager: 0,
+  };
+}
+
 /** Minimal config lists so Tier2 can resolve default ids. Refine from captures. */
 function handleConfig(env: Env, resource: string): Response {
   switch (resource) {
@@ -360,7 +401,7 @@ function handleConfig(env: Env, resource: string): Response {
       return jsonResponse(200, [{ id: Number(env.DEFAULT_TYPE_ID), name: "Incident" }]);
     case "status":
     case "statuses":
-      return jsonResponse(200, [{ id: Number(env.DEFAULT_STATUS_ID), name: "New" }]);
+      return jsonResponse(200, [haloStatus(Number(env.DEFAULT_STATUS_ID), "New")]);
     case "team":
     case "teams":
       return jsonResponse(200, [{ id: Number(env.DEFAULT_GROUP_ID), name: "Everyone" }]);
