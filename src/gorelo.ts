@@ -21,6 +21,17 @@ export class GoreloError extends Error {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Strip trailing '/' characters in a single linear scan. A regex like
+ * `/\/+$/` backtracks quadratically on inputs with long runs of slashes, so
+ * we walk back from the end by hand instead — O(n) regardless of the input.
+ */
+function stripTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 47 /* '/' */) end--;
+  return s.slice(0, end);
+}
+
 const MAX_RETRY_WAIT_MS = 15_000; // cap any single backoff so a sync can't hang
 
 /**
@@ -48,7 +59,7 @@ export class GoreloClient {
   private readonly apiKey: string;
 
   constructor(env: Env) {
-    this.baseUrl = env.GORELO_BASE_URL.replace(/\/+$/, "");
+    this.baseUrl = stripTrailingSlashes(env.GORELO_BASE_URL);
     this.apiKey = env.GORELO_API_KEY;
   }
 

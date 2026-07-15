@@ -5,6 +5,10 @@ on:
   push:
     branches: [main]
 
+# Least privilege: this workflow only reads the checked-out code.
+permissions:
+  contents: read
+
 # Cancel superseded runs on the same ref (e.g. a new push to a PR branch).
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}

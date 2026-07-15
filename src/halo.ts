@@ -467,21 +467,28 @@ function stripTags(s: string): string {
   return s.replace(/<[^>]*>/g, " ");
 }
 function decodeEntities(s: string): string {
+  // Decode `&amp;` LAST: doing it first would let a literal `&lt;` (written
+  // `&amp;lt;`) collapse to `<` on a later pass — a double-unescape. By the
+  // time `&amp;` runs, no other rule can re-interpret the `&`s it produces.
   return s
     .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
     .replace(/&quot;/gi, '"')
-    .replace(/&#39;|&apos;/gi, "'");
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&amp;/gi, "&");
 }
 function htmlToText(s: string): string {
   // Drop non-content blocks first — a full HTML email (the /actions note) carries
   // <head>/<style> with @font-face/@media rules that otherwise flatten into noise.
+  // Match end tags tolerantly (`</script >`, `</script\t\n bar>`): a browser
+  // closes on `</script` followed by anything up to the next `>`, so a naive
+  // `</script>` would leave the block's contents behind to flatten into the
+  // extracted text. `[^>]*>` consumes any trailing junk before the `>`.
   const stripped = s
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<head[\s\S]*?<\/head>/gi, " ");
+    .replace(/<style[\s\S]*?<\/style[^>]*>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script[^>]*>/gi, " ")
+    .replace(/<head[\s\S]*?<\/head[^>]*>/gi, " ");
   return decodeEntities(stripTags(stripped))
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
