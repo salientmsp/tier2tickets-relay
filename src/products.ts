@@ -21,6 +21,17 @@ export interface Product {
   // never widens access.
   userAgent?: string;
 
+  // Optional per-product Halo OAuth credentials, resolved from these Env vars. Each
+  // product authenticates with its OWN client_id (Tier2's tenant credential, Huntress's
+  // fixed client_id), so a single shared pair can't token-enforce more than one product
+  // (issue #51). When BOTH vars resolve to non-empty values, this product's `/token`
+  // calls are validated against them and its resource requests are token-enforced (per
+  // HALO_TOKEN_ENFORCE); when either is missing the product stays lenient (any creds
+  // accepted, no enforcement), preserving pre-per-product behavior during rollout. The
+  // secret var MUST be set via `wrangler secret put`, never committed to wrangler.toml.
+  clientIdVar?: keyof Env; // Env var holding this product's OAuth client_id
+  clientSecretVar?: keyof Env; // Env secret holding this product's client_secret
+
   // Ticket-create behavior. Tier2 posts /tickets then a separate /actions note, so
   // the Gorelo create is DEFERRED to fold the note in. One-shot products (Huntress)
   // send the whole ticket in the create and never post /actions, so their create
@@ -51,6 +62,10 @@ export const PRODUCTS: Record<string, Product> = {
     defaultEnabled: true,
     ips: new Set(["34.202.14.153", "3.209.57.193"]),
     cidrs: [],
+    // Tier2 keeps the original global HALO_CLIENT_ID/HALO_CLIENT_SECRET pair — no
+    // migration needed for the existing deployment.
+    clientIdVar: "HALO_CLIENT_ID",
+    clientSecretVar: "HALO_CLIENT_SECRET",
     deferCreate: true, // two-step: /tickets then /actions note folds in before the create
     ticketCreatedBy: "Helpdesk Buttons",
     ticketBodyHeading: "Report Summary",
@@ -65,6 +80,10 @@ export const PRODUCTS: Record<string, Product> = {
     ips: new Set(["52.4.130.244", "34.205.224.75", "184.72.103.99", "107.21.187.4"]),
     cidrs: ["4.150.82.176/28", "172.200.220.176/28"],
     userAgent: "Huntress Halo Integration",
+    // Huntress authenticates with its own client_id — its own credential pair, set
+    // independently of Tier2's so both pass token enforcement (issue #51).
+    clientIdVar: "HALO_CLIENT_ID_HUNTRESS",
+    clientSecretVar: "HALO_CLIENT_SECRET_HUNTRESS",
     deferCreate: false, // one-shot: the whole ticket arrives in the create, no /actions note
     ticketCreatedBy: "Huntress",
     ticketBodyHeading: "Details",
@@ -159,4 +178,45 @@ export function ipAllowed(request: Request, env: Env): boolean {
     if (flag === "false" || flag === "0" || flag === "") return true; // explicitly disabled
   }
   return matchProduct(request, env) !== null;
+}
+
+/** A resolved Halo OAuth credential pair (both parts guaranteed non-empty). */
+export interface HaloCreds {
+  clientId: string;
+  secret: string;
+}
+
+/** A `{clientId, secret}` pair, or null unless BOTH env vars resolve to non-empty. */
+function credsFrom(env: Env, idVar?: keyof Env, secretVar?: keyof Env): HaloCreds | null {
+  const clientId = idVar ? String(env[idVar] ?? "") : "";
+  const secret = secretVar ? String(env[secretVar] ?? "") : "";
+  return clientId && secret ? { clientId, secret } : null;
+}
+
+/**
+ * A product's own configured OAuth pair, or null when it has no credentials (its
+ * lenient mode: any creds accepted at `/token`, no token enforcement). Each product
+ * carries its OWN pair (Tier2 via the legacy HALO_CLIENT_ID/SECRET, Huntress via
+ * HALO_CLIENT_ID_HUNTRESS/SECRET) so both can authenticate under `enforce` — the fix
+ * for issue #51.
+ */
+export function productCredentials(product: Product, env: Env): HaloCreds | null {
+  return credsFrom(env, product.clientIdVar, product.clientSecretVar);
+}
+
+/**
+ * Resolve the OAuth credentials governing a request: the matched product's own pair
+ * (for Tier2 that IS the legacy HALO_CLIENT_ID/SECRET). When no product matches — e.g.
+ * the IP allowlist is disabled — fall back to the global HALO_CLIENT_ID/SECRET pair so
+ * legacy single-credential deployments keep working unchanged. `creds` is null in
+ * lenient mode. `product` is echoed so a minted token can be bound to it (a `prod`
+ * claim) and the enforcement gate can check that claim against the request's product.
+ */
+export function haloCredentials(
+  request: Request,
+  env: Env,
+): { product: Product | null; creds: HaloCreds | null } {
+  const product = matchProduct(request, env);
+  if (product) return { product, creds: productCredentials(product, env) };
+  return { product: null, creds: credsFrom(env, "HALO_CLIENT_ID", "HALO_CLIENT_SECRET") };
 }

@@ -43,12 +43,23 @@ export interface Env {
   // Comma/space/newline separated, e.g. "ntfy://alerts, msteams://…, slack://…".
   NOTIFLY_URLS?: string;
 
-  // optional Halo mock OAuth credentials (Tier2's client_id/client_secret).
-  // If both set, the token endpoint validates them; otherwise any creds are accepted.
+  // Per-product Halo mock OAuth credentials (issue #51). Each product authenticates
+  // with its OWN client_id, so credentials are resolved per matched product via the
+  // clientIdVar/clientSecretVar on its PRODUCTS entry (src/products.ts). When a
+  // product's pair is set, its /token calls are validated and its resource requests
+  // token-enforced; when unset that product stays lenient (any creds accepted).
+  //
+  // tier2 uses the original pair below (no migration for the existing deployment);
+  // when no product matches (e.g. the allowlist is disabled) these are also the
+  // global fallback so legacy single-credential setups keep working.
   HALO_CLIENT_ID?: string;
   HALO_CLIENT_SECRET?: string;
-  // Bearer-token enforcement on Halo resource endpoints (audit F1). Only active
-  // when BOTH HALO_CLIENT_ID and HALO_CLIENT_SECRET are set. Values (default off):
+  // Huntress's own OAuth pair (its distinct client_id). Set the secret via
+  // `wrangler secret put HALO_CLIENT_SECRET_HUNTRESS`.
+  HALO_CLIENT_ID_HUNTRESS?: string;
+  HALO_CLIENT_SECRET_HUNTRESS?: string;
+  // Bearer-token enforcement on Halo resource endpoints (audit F1). Active per
+  // request when the MATCHED product has a credential pair set. Values (default off):
   //   "off"     — no token check (identical to legacy behavior)
   //   "observe" — verify the bearer token and log a breadcrumb, never reject
   //   "enforce" — reject non-/token requests with 401 when the token is missing/invalid/expired

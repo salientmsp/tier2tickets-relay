@@ -56,7 +56,7 @@ Cron (every 6h) / POST /admin/sync / first-call bootstrap ──▶ syncAll() de
 |---|---|
 | `src/index.ts` | `fetch` + `scheduled` handlers, routing (admin/health/Halo) |
 | `src/halo.ts` | the HaloPSA mock — token, lookups, per-product create, report parsing |
-| `src/products.ts` | product registry (`PRODUCTS`, IPs/CIDRs, `ENABLE_*`, UA gate, `matchProduct`, `ipAllowed`) |
+| `src/products.ts` | product registry (`PRODUCTS`, IPs/CIDRs, `ENABLE_*`, UA gate, per-product OAuth creds, `matchProduct`, `haloCredentials`, `ipAllowed`) |
 | `src/haloShapes.ts` | full Halo config-item shapes (status/type/priority/team), field lists derived from the swagger |
 | `src/gorelo.ts` | Gorelo API client (retry/backoff, defensive parsing) |
 | `src/sync.ts` | `syncAll()` — rebuild the D1 mirror off the request path |
@@ -66,6 +66,7 @@ Cron (every 6h) / POST /admin/sync / first-call bootstrap ──▶ syncAll() de
 | `docs/halo-swagger.v2.json` | the real HaloPSA OpenAPI spec — reference for shaping mock responses |
 | `migrations/0001_init.sql` | D1 schema (also self-created at runtime) |
 | `scripts/gorelo-ids.sh` | dump groups/types/statuses/clients to fill the vars |
+| `scripts/halo-cred.sh` | generate a per-product Halo OAuth pair, push the secret via `wrangler secret put`, print the creds |
 | `test/` | vitest specs (`@cloudflare/vitest-pool-workers`) |
 
 ## Deploy
@@ -95,8 +96,10 @@ GORELO_API_KEY=xxxx ./scripts/gorelo-ids.sh
 # 4. Set secrets (never committed)
 wrangler secret put GORELO_API_KEY     # X-API-Key for Gorelo (ticket write + asset/contact/client read)
 wrangler secret put ADMIN_KEY          # gates POST /admin/sync
-wrangler secret put HALO_CLIENT_ID     # optional: Halo mock OAuth client_id  (validated if both set)
-wrangler secret put HALO_CLIENT_SECRET # optional: Halo mock OAuth client_secret
+# Per-product Halo mock OAuth secrets (issue #51) — one client_secret per product,
+# paired with its (non-secret) client_id var. Easiest: ./scripts/halo-cred.sh <product>
+wrangler secret put HALO_CLIENT_SECRET          # optional: tier2's client_secret (validated with HALO_CLIENT_ID)
+wrangler secret put HALO_CLIENT_SECRET_HUNTRESS # optional: Huntress's client_secret (validated with HALO_CLIENT_ID_HUNTRESS)
 
 # 5. Deploy
 wrangler deploy
@@ -115,10 +118,13 @@ Configure Tier2 as a **HaloPSA — Cloud Hosted** integration:
 1. **Integration type:** HaloPSA / HaloITSM (Cloud Hosted).
 2. **Resource Server *and* Authorization Server:** both = your Worker host
    (e.g. `https://tier2tickets-relay.<subdomain>.workers.dev`).
-3. **API key:** the `tenant+client_id:client_secret` credential. If you set
-   `HALO_CLIENT_ID`/`HALO_CLIENT_SECRET`, the token endpoint validates them;
-   otherwise any credentials are accepted. (The on-prem `client_id:client_secret`
-   form is tolerated too.)
+3. **API key:** the `tenant+client_id:client_secret` credential. Credentials are
+   **per product** (issue #51): if you set that product's `client_id`/`client_secret`
+   pair (tier2 → `HALO_CLIENT_ID`/`HALO_CLIENT_SECRET`), the token endpoint validates
+   them; otherwise any credentials are accepted. (The on-prem `client_id:client_secret`
+   form is tolerated too.) Generate a pair and push the secret with
+   `./scripts/halo-cred.sh tier2`, then paste the printed `client_id`/`client_secret`
+   here.
 4. Press **Integration Test** / do a real press — the Worker answers the OAuth +
    lookup + create + note sequence, and a Gorelo ticket appears.
 
@@ -145,7 +151,7 @@ list endpoints use the `*_View` **paging envelope** (`page_no`/`page_size`/`reco
 
 | Halo call | Worker response |
 |---|---|
-| `POST /token` (client_credentials) | validates `HALO_CLIENT_ID/SECRET` (if set) and returns a bearer token — a signed HMAC token when creds are set, else an opaque one. Enforcement on the endpoints below is governed by `HALO_TOKEN_ENFORCE` (see [Security](#security)) |
+| `POST /token` (client_credentials) | validates the **matched product's** `client_id`/`client_secret` (if set — tier2 via `HALO_CLIENT_ID/SECRET`, Huntress via `HALO_CLIENT_ID_HUNTRESS/SECRET`) and returns a bearer token — a signed HMAC token bound to that product when creds are set, else an opaque one. Enforcement on the endpoints below is governed by `HALO_TOKEN_ENFORCE` (see [Security](#security)) |
 | `GET /users?search={email}` | the Gorelo **contact** (id/name/email/client/site) in the `Users_View` envelope; the `unregistered@helpdeskbuttons.com` catch-all maps to `CATCHALL_CLIENT_ID` |
 | `GET /client` / `GET /site` | Gorelo **clients** / **locations** from the mirror (`Area_View` / `Site_View` envelope) |
 | `GET /client/{id}` | a **single** Halo `Area` object (not the list envelope) — name from the mirror, synthesized for an unmirrored id (e.g. the catch-all) |
@@ -260,6 +266,8 @@ interface Product {
   ips: Set<string>;         // exact source IPs
   cidrs: string[];          // IPv4 CIDR ranges
   userAgent?: string;       // optional UA second gate (IP AND UA when set)
+  clientIdVar?: keyof Env;      // Env var holding this product's OAuth client_id
+  clientSecretVar?: keyof Env;  // Env secret holding this product's client_secret
   deferCreate: boolean;     // true = two-step /tickets+/actions; false = immediate
   ticketCreatedBy: string;  // submitter-name fallback
   ticketBodyHeading: string;// heading over the pasted ticket body
@@ -282,16 +290,18 @@ Gating and per-product create are covered under [Security](#security) and the
    `*_View` paging envelope; config lookups need full objects, not `{id,name}`).
 4. Flip `ENABLE_<KEY>="true"` when ready.
 
-> **Single Halo credentials (planned: per-product):** `HALO_CLIENT_ID`/
-> `HALO_CLIENT_SECRET` are one pair for the whole Worker. With them set and
-> `HALO_TOKEN_ENFORCE="enforce"`, only tokens minted for *that* client validate — so
-> multiple products with **different** OAuth credentials can't all pass token
-> enforcement at once (e.g. Huntress authenticates with a different `client_id` than
-> Tier2). **Interim:** run `HALO_TOKEN_ENFORCE` at `off`/`observe`, or leave the Halo
-> OAuth secrets unset (any credentials accepted) — do **not** run `enforce` with the
-> secrets set while more than one product is enabled. Moving to per-product
-> credentials is planned work — tracked in
-> [#51](https://github.com/00o-sh/gorelo-haloapi-relay/issues/51).
+**Per-product Halo OAuth credentials (issue #51):** each product authenticates with
+its **own** `client_id`/`client_secret`, resolved from the `clientIdVar`/`clientSecretVar`
+on its `PRODUCTS` entry — tier2 keeps the original `HALO_CLIENT_ID`/`HALO_CLIENT_SECRET`
+pair, Huntress uses `HALO_CLIENT_ID_HUNTRESS`/`HALO_CLIENT_SECRET_HUNTRESS`. `/token`
+validates the presented creds against the matched product's pair and mints a token
+**bound to that product** (a `prod` claim, keyed by that product's secret); the
+enforcement gate verifies against the same pair. So `HALO_TOKEN_ENFORCE="enforce"` now
+works with **multiple products at once** — each passes with its own token, and one
+product's token can't authorize another's request. A product whose pair is **unset**
+stays lenient (any creds accepted, no enforcement), so products can be onboarded /
+rolled out independently. Generate a pair and push its secret with
+`./scripts/halo-cred.sh <product>`.
 
 ## Data store & refresh
 
@@ -365,12 +375,20 @@ Gorelo's agent/client lists have no server-side filters, so they're mirrored int
   - The whole allowlist is disabled **only** by an explicit, normalized
     `ENFORCE_IP_ALLOWLIST` of `false`, `0`, or empty; an unset var, `true`, or any
     other value enforces. An absent `CF-Connecting-IP` header also fails closed.
-- **OAuth credentials → token enforcement:** setting `HALO_CLIENT_ID`/`HALO_CLIENT_SECRET`
-  makes `/token` validate them **and** mint a signed HMAC-SHA256 bearer token
-  (`payload.sig`, keyed by `HALO_CLIENT_SECRET`, with an `exp` claim; Web Crypto,
-  no new dependency). Whether that token then **protects the resource endpoints**
-  depends on `HALO_TOKEN_ENFORCE` (the gate is a no-op unless both credentials are
-  set, and never applies to `/token`):
+- **OAuth credentials → token enforcement (per product, issue #51):** credentials
+  are resolved for the request's **matched product** — tier2 via `HALO_CLIENT_ID`/
+  `HALO_CLIENT_SECRET`, Huntress via `HALO_CLIENT_ID_HUNTRESS`/`HALO_CLIENT_SECRET_HUNTRESS`
+  (when no product matches — e.g. the allowlist is off — the un-suffixed pair is the
+  global fallback). Setting a product's pair makes `/token` validate its
+  `client_id`/`client_secret` **and** mint a signed HMAC-SHA256 bearer token
+  (`payload.sig`, keyed by **that product's** secret, with `exp` and a `prod` claim
+  binding it to the product; Web Crypto, no new dependency). Because each product has
+  its own pair and its token carries its `prod` claim, **multiple products can all
+  pass `enforce` at once** — one product's token never authorizes another's request,
+  and the old single-credential limitation (only one product could authenticate under
+  `enforce`) is gone. Whether that token then **protects the resource endpoints**
+  depends on `HALO_TOKEN_ENFORCE` (the gate is a no-op for a product whose credentials
+  are unset — that product stays lenient — and never applies to `/token`):
   - `off` (**default**) — no token check on resource endpoints. The credentials
     gate `/token` issuance only; they do **not** protect `/users`, `/tickets`, etc.
   - `observe` — the gate verifies the `Authorization: Bearer` token and logs a

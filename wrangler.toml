@@ -124,15 +124,29 @@ DEBUG_LOGS = "false"
 #                      is missing/invalid/expired on any non-/token resource.
 # Rollout: deploy "off" -> switch to "observe" and confirm from breadcrumbs that
 # real Tier2 traffic round-trips a valid token -> only then set "enforce".
+# Per-product (issue #51): the gate is applied against the MATCHED product's own
+# credential pair, so with per-product creds set, "enforce" works with multiple
+# products at once — each authenticates with its own client_id/secret.
 HALO_TOKEN_ENFORCE = "enforce"
+
+# Non-secret per-product OAuth client_ids (the client_secret goes in via `wrangler
+# secret put` — see below). The client_id is a public identifier, so it can live
+# here. Uncomment/fill per enabled product; both the id AND the secret must resolve
+# for that product to be validated + token-enforced (else it stays lenient).
+#   HALO_CLIENT_ID          — tier2's client_id (its var is un-suffixed; secret is HALO_CLIENT_SECRET)
+#   HALO_CLIENT_ID_HUNTRESS — Huntress's client_id (e.g. "13b3832f9306b677fb72eea412da5df7")
+# Generate a pair + push the secret with:  ./scripts/halo-cred.sh <product>
+# HALO_CLIENT_ID_HUNTRESS = "13b3832f9306b677fb72eea412da5df7"
 
 # --- Secrets (set via CLI, never committed) ---
 #   wrangler secret put GORELO_API_KEY      # X-API-Key for Gorelo (ticket write + asset/contact/client read scopes)
 #   wrangler secret put ADMIN_KEY           # gates POST /admin/sync (X-Admin-Key / X-API-Key / Authorization: Bearer)
 #   wrangler secret put NOTIFLY_URLS        # optional: notifly (Apprise) URL(s) alerted when a ticket is dead-lettered
 #                                           #   e.g. "ntfy://alerts" | Teams Workflows "workflows://…&sig=…" — comma/space separated
-#   wrangler secret put HALO_CLIENT_ID   # optional: Halo mock OAuth client_id  (validated if both are set)
-#   wrangler secret put HALO_CLIENT_SECRET # optional: Halo mock OAuth client_secret
+# Per-product Halo mock OAuth secrets (issue #51) — one client_secret per product,
+# paired with the client_id var above. Easiest: ./scripts/halo-cred.sh <product>
+#   wrangler secret put HALO_CLIENT_SECRET          # tier2's client_secret (validated with HALO_CLIENT_ID)
+#   wrangler secret put HALO_CLIENT_SECRET_HUNTRESS # Huntress's client_secret (validated with HALO_CLIENT_ID_HUNTRESS)
 
 # --- D1 ---
 # Create once:  wrangler d1 create tier2tickets-relay

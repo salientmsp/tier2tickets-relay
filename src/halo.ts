@@ -21,9 +21,9 @@ import { GoreloClient, GoreloError, extractTicketNumber } from "./gorelo.js";
 import { breadcrumb, debug, debugOn, describeError } from "./log.js";
 import { normalizeEmail, normalizeHost } from "./parse.js";
 import { assetNum, syncAll } from "./sync.js";
-import { ipAllowed, matchProduct, type Product } from "./products.js";
+import { haloCredentials, ipAllowed, matchProduct, type Product } from "./products.js";
 import { haloPriority, haloStatus, haloTeam, haloTicketType } from "./haloShapes.js";
-import { signToken, verifyTokenResult } from "./token.js";
+import { signToken, verifyTokenResult, type TokenPayload } from "./token.js";
 import type {
   CreatePublicTicketCommand,
   Env,
@@ -169,18 +169,29 @@ const TOKEN_TTL_SECONDS = 3600;
 
 /**
  * Classify the inbound bearer token for the enforcement gate (audit F1):
- * `missing` (no bearer header), `invalid` (bad signature/shape), `expired`, or
- * `present` (valid & unexpired). Keyed by HALO_CLIENT_SECRET — no separate secret.
+ * `missing` (no bearer header), `invalid` (bad signature/shape, or minted for a
+ * different product), `expired`, or `present` (valid & unexpired). Keyed by the
+ * matched product's secret — no separate secret. When `expectProduct` is given, a
+ * token that CARRIES a `prod` claim must match it: a token minted for another product
+ * already fails the HMAC check under distinct secrets, and the claim keeps them apart
+ * even if two products' secrets ever coincide. A token WITHOUT a `prod` claim (a
+ * legacy/global token, or one minted before per-product creds) still passes on the
+ * secret alone, so tokens issued just before this rolls out aren't rejected mid-TTL.
  */
 async function bearerTokenStatus(
   request: Request,
   secret: string,
+  expectProduct?: string,
 ): Promise<"present" | "missing" | "invalid" | "expired"> {
   const auth = request.headers.get("Authorization") ?? "";
   const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
   if (!token) return "missing";
   const r = await verifyTokenResult(secret, token);
-  return r.ok ? "present" : r.reason;
+  if (!r.ok) return r.reason;
+  if (expectProduct && r.payload.prod != null && r.payload.prod !== expectProduct) {
+    return "invalid";
+  }
+  return "present";
 }
 
 async function parseKeyValues(body: string, contentType: string): Promise<Record<string, string>> {
@@ -204,19 +215,27 @@ async function handleToken(request: Request, env: Env, url: URL, body: string): 
   const params = await parseKeyValues(body, ct);
   const clientId = params.client_id ?? "";
   const tenant = params.tenant ?? url.searchParams.get("tenant") ?? "";
-  debug(env, `HALO token grant=${params.grant_type ?? ""} tenant=${tenant} client_id=${clientId}`);
+  // Credentials are resolved for the request's product (issue #51): Tier2 validates
+  // against its pair, Huntress against its own, so both authenticate under `enforce`.
+  const { product, creds } = haloCredentials(request, env);
+  debug(
+    env,
+    `HALO token grant=${params.grant_type ?? ""} tenant=${tenant} client_id=${clientId} product=${product?.key ?? "none"}`,
+  );
 
-  const credsSet = Boolean(env.HALO_CLIENT_ID && env.HALO_CLIENT_SECRET);
-  if (credsSet) {
-    if (clientId !== env.HALO_CLIENT_ID || params.client_secret !== env.HALO_CLIENT_SECRET) {
+  if (creds) {
+    if (clientId !== creds.clientId || params.client_secret !== creds.secret) {
       return jsonResponse(401, { error: "invalid_client" });
     }
   }
-  // With credentials set and validated, mint a signed HMAC token (keyed by
-  // HALO_CLIENT_SECRET) that the resource gate can verify (audit F1). With
+  // With credentials set and validated, mint a signed HMAC token keyed by the matched
+  // product's secret and BOUND to that product (the `prod` claim), so the resource gate
+  // can verify it and reject a token minted for another product (audit F1). With
   // credentials unset, keep the legacy opaque token so nothing breaks.
-  const token = credsSet
-    ? await signToken(env.HALO_CLIENT_SECRET!, { exp: Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS })
+  const payload: TokenPayload = { exp: Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS };
+  if (product) payload.prod = product.key;
+  const token = creds
+    ? await signToken(creds.secret, payload)
     : crypto.randomUUID().replace(/-/g, "");
   return jsonResponse(200, {
     access_token: token,
@@ -1308,18 +1327,23 @@ export async function handleHalo(
 
   const resource = haloResource(url.pathname);
 
-  // Bearer-token gate (audit F1). No-op unless BOTH HALO_CLIENT_ID and
-  // HALO_CLIENT_SECRET are set, and never applies to /token itself. Three modes:
+  // Bearer-token gate (audit F1). Resolved per matched product (issue #51): the gate
+  // is a no-op unless THAT product has a credential pair configured, and never applies
+  // to /token itself. The token is verified against the product's own secret and its
+  // `prod` claim, so one product's token can't authorize another. Three modes:
   //   off      — no token check (default; identical to legacy behavior)
   //   observe  — verify + breadcrumb the outcome, never reject
   //   enforce  — 401 { error: "invalid_token" } when the token is not present-&-valid
-  if (env.HALO_CLIENT_ID && env.HALO_CLIENT_SECRET && resource !== "token") {
-    const mode = (env.HALO_TOKEN_ENFORCE ?? "off").trim().toLowerCase();
-    if (mode === "observe" || mode === "enforce") {
-      const status = await bearerTokenStatus(request, env.HALO_CLIENT_SECRET);
-      breadcrumb(`HALO token ${mode} resource=${resource} token=${status}`);
-      if (mode === "enforce" && status !== "present") {
-        return jsonResponse(401, { error: "invalid_token" });
+  if (resource !== "token") {
+    const { product, creds } = haloCredentials(request, env);
+    if (creds) {
+      const mode = (env.HALO_TOKEN_ENFORCE ?? "off").trim().toLowerCase();
+      if (mode === "observe" || mode === "enforce") {
+        const status = await bearerTokenStatus(request, creds.secret, product?.key);
+        breadcrumb(`HALO token ${mode} product=${product?.key ?? "none"} resource=${resource} token=${status}`);
+        if (mode === "enforce" && status !== "present") {
+          return jsonResponse(401, { error: "invalid_token" });
+        }
       }
     }
   }

@@ -246,6 +246,126 @@ describe("Halo bearer-token enforcement gate (audit F1)", () => {
   });
 });
 
+describe("per-product Halo OAuth credentials (#51)", () => {
+  // Real Halo traffic always carries a CF-Connecting-IP (from Cloudflare); the
+  // per-product credential resolution keys off which product that IP matches.
+  const TIER2_IP = "34.202.14.153";
+  const HUNTRESS_IP = "52.4.130.244";
+  const HUNTRESS_UA = "Huntress Halo Integration";
+  // tier2 reuses the global pair set in vitest.config; huntress gets its own.
+  const HUNTRESS_ID = "huntress-client-id";
+  const HUNTRESS_SECRET = "huntress-client-secret";
+
+  type Overridable = Record<string, string | undefined>;
+  const withEnv = async (overrides: Overridable, fn: () => Promise<void>): Promise<void> => {
+    const e = env as unknown as Overridable;
+    const prev: Overridable = {};
+    for (const k of Object.keys(overrides)) prev[k] = e[k];
+    Object.assign(e, overrides);
+    try {
+      await fn();
+    } finally {
+      for (const k of Object.keys(overrides)) e[k] = prev[k];
+    }
+  };
+
+  const tokenReq = (
+    ip: string,
+    clientId: string,
+    clientSecret: string,
+    ua?: string,
+  ): RequestInit => {
+    const headers: Record<string, string> = {
+      "content-type": "application/x-www-form-urlencoded",
+      "CF-Connecting-IP": ip,
+    };
+    if (ua) headers["User-Agent"] = ua;
+    return {
+      method: "POST",
+      headers,
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: clientId,
+        client_secret: clientSecret,
+      }).toString(),
+    };
+  };
+
+  const accessToken = async (init: RequestInit): Promise<string> => {
+    const res = await req("/token", init);
+    expect(res.status).toBe(200);
+    return String(((await res.json()) as Record<string, unknown>).access_token);
+  };
+
+  // Both products enabled; enforcement on. Huntress configured with its OWN pair.
+  const bothEnabled: Overridable = {
+    HALO_TOKEN_ENFORCE: "enforce",
+    ENABLE_HUNTRESS: "true",
+    HALO_CLIENT_ID_HUNTRESS: HUNTRESS_ID,
+    HALO_CLIENT_SECRET_HUNTRESS: HUNTRESS_SECRET,
+  };
+
+  it("validates each product's /token against its OWN credentials", async () => {
+    await withEnv(bothEnabled, async () => {
+      // tier2's pair authenticates a tier2-IP request.
+      expect((await req("/token", tokenReq(TIER2_IP, "halo-test-id", "halo-test-secret"))).status).toBe(200);
+      // Huntress's pair authenticates a Huntress-IP+UA request.
+      expect(
+        (await req("/token", tokenReq(HUNTRESS_IP, HUNTRESS_ID, HUNTRESS_SECRET, HUNTRESS_UA))).status,
+      ).toBe(200);
+      // Cross-product creds are rejected — Huntress's client_id at a tier2 IP fails.
+      expect((await req("/token", tokenReq(TIER2_IP, HUNTRESS_ID, HUNTRESS_SECRET))).status).toBe(401);
+      // ...and tier2's client_id at a Huntress IP fails.
+      expect(
+        (await req("/token", tokenReq(HUNTRESS_IP, "halo-test-id", "halo-test-secret", HUNTRESS_UA))).status,
+      ).toBe(401);
+    });
+  });
+
+  it("under enforce, BOTH products authenticate with their own token (the #51 fix)", async () => {
+    await withEnv(bothEnabled, async () => {
+      const t2 = await accessToken(tokenReq(TIER2_IP, "halo-test-id", "halo-test-secret"));
+      const th = await accessToken(tokenReq(HUNTRESS_IP, HUNTRESS_ID, HUNTRESS_SECRET, HUNTRESS_UA));
+
+      // Each product's own token passes its own resource requests.
+      const t2res = await req("/users?search=user@corp.com", {
+        headers: { "halo-app-name": "tier2tech", "CF-Connecting-IP": TIER2_IP, Authorization: `Bearer ${t2}` },
+      });
+      expect(t2res.status).toBe(200);
+      const thres = await req("/users?search=user@corp.com", {
+        headers: { "CF-Connecting-IP": HUNTRESS_IP, "User-Agent": HUNTRESS_UA, Authorization: `Bearer ${th}` },
+      });
+      expect(thres.status).toBe(200);
+    });
+  });
+
+  it("rejects a token minted for a DIFFERENT product (prod claim + distinct secret)", async () => {
+    await withEnv(bothEnabled, async () => {
+      const t2 = await accessToken(tokenReq(TIER2_IP, "halo-test-id", "halo-test-secret"));
+      // tier2's token presented on a Huntress request is not valid for Huntress.
+      const res = await req("/users?search=user@corp.com", {
+        headers: { "CF-Connecting-IP": HUNTRESS_IP, "User-Agent": HUNTRESS_UA, Authorization: `Bearer ${t2}` },
+      });
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: "invalid_token" });
+    });
+  });
+
+  it("a product with NO credentials stays lenient under enforce (rollout-safe)", async () => {
+    // Huntress enabled + enforce, but its credential pair is left unset.
+    await withEnv({ HALO_TOKEN_ENFORCE: "enforce", ENABLE_HUNTRESS: "true" }, async () => {
+      // No bearer token at all — a credential-less product is not gated.
+      const res = await req("/users?search=user@corp.com", {
+        headers: { "CF-Connecting-IP": HUNTRESS_IP, "User-Agent": HUNTRESS_UA },
+      });
+      expect(res.status).toBe(200);
+      // /token accepts any creds for it (legacy lenient behavior), opaque token.
+      const tok = await accessToken(tokenReq(HUNTRESS_IP, "anything", "goes", HUNTRESS_UA));
+      expect(tok.split(".")).toHaveLength(1); // opaque UUID, not a signed payload.sig
+    });
+  });
+});
+
 describe("Halo routing to real Tier2 paths (no /api prefix)", () => {
   it("GET /users (lowercase, halo-app-name header) resolves a contact", async () => {
     const res = await req("/users?search=user@corp.com", { headers: { "halo-app-name": "tier2tech" } });

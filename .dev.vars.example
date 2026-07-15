@@ -17,8 +17,16 @@ ADMIN_KEY="another-long-random-secret"
 # https -> workflows:// conversion client-side (nothing leaves your browser).
 # NOTIFLY_URLS="ntfy://my-hdb-alerts"
 
-# Optional: Halo mock OAuth credentials. If both are set, the /token endpoint
-# validates the client_id/client_secret Tier2 sends; otherwise any creds are accepted
-# (requests are still IP-gated). Set the same values in the Tier2 Halo integration.
+# Optional: per-product Halo mock OAuth credentials (issue #51). Each product
+# authenticates with its OWN client_id, so credentials are resolved per matched
+# product. When both the id AND secret are set for a product, the /token endpoint
+# validates them and (under HALO_TOKEN_ENFORCE) its resource requests are token-
+# enforced; otherwise that product stays lenient (any creds accepted — still IP-gated).
+# Set the same values on that product's Halo integration side.
+#
+# tier2 uses the original un-suffixed pair:
 HALO_CLIENT_ID="halo-mock-client-id"
 HALO_CLIENT_SECRET="halo-mock-client-secret"
+# Huntress uses its own (its distinct client_id). Uncomment to enable validation:
+# HALO_CLIENT_ID_HUNTRESS="13b3832f9306b677fb72eea412da5df7"
+# HALO_CLIENT_SECRET_HUNTRESS="huntress-mock-client-secret"
