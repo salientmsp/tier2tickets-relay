@@ -48,8 +48,19 @@ max_retries = 3
 # US: https://api.usw.gorelo.io   AU: https://api.aue.gorelo.io
 GORELO_BASE_URL = "https://api.usw.gorelo.io"
 
-# When "true", only Tier2's two fixed source IPs (via CF-Connecting-IP) may POST tickets.
+# When "true" (default), only the source IPs of the enabled products below (matched
+# via CF-Connecting-IP) may POST tickets. "false"/"0"/"" disables the allowlist.
 ENFORCE_IP_ALLOWLIST = "true"
+
+# Per-product allowlist toggles. "true" enables that product's source IPs/CIDR
+# ranges (matched via CF-Connecting-IP); any other value disables. Product keys
+# and IPs live in src/products.ts (PRODUCTS). An unset flag falls back to the
+# product's built-in default: tier2 on (backward-compatible), huntress off (opt-in).
+# NOTE: enabling a product is only the IP doorman — the ticket-building path is
+# still Tier2/Helpdesk-Buttons-shaped, so a newly enabled product needs its own
+# field handling before its requests produce correct Gorelo tickets.
+ENABLE_TIER2 = "true"
+ENABLE_HUNTRESS = "true"
 
 # --- Gorelo IDs: fill these from scripts/gorelo-ids.sh (values below are from the live Salient tenant) ---
 # groupId / typeId / priorityId / sourceId are NON-NULLABLE on CreatePublicTicketCommand
@@ -101,7 +112,7 @@ SEND_TICKET_CREATED_EMAIL = "true"
 # Verbose logging toggle. "false" (default) logs only non-PII breadcrumbs (method/path/
 # status + resolved ids). Set "true" to log full HALO CAPTURE/RESPONSE bodies — which
 # contain PII/PHI (names, emails, phones) — only for short debugging windows.
-DEBUG_LOGS = "false"
+DEBUG_LOGS = "true"
 
 # Bearer-token enforcement on the Halo resource endpoints (audit F1). Only takes
 # effect when BOTH HALO_CLIENT_ID and HALO_CLIENT_SECRET secrets are set; the

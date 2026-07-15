@@ -264,9 +264,31 @@ describe("Halo routing to real Tier2 paths (no /api prefix)", () => {
 });
 
 describe("Halo lookups (Gorelo-backed)", () => {
-  it("GET /api/Client returns mirrored clients", async () => {
+  it("GET /api/Client returns mirrored clients in the fuller Halo shape", async () => {
     const res = await req("/api/Client?search=corp");
-    expect(await res.json()).toEqual({ clients: [{ id: 10, name: "Corp" }], record_count: 1 });
+    const j = (await res.json()) as { clients: Array<Record<string, unknown>>; record_count: number };
+    expect(j.record_count).toBe(1);
+    expect(j.clients).toHaveLength(1);
+    // id/name preserved for existing consumers; standard Halo fields added for stricter ones.
+    expect(j.clients[0]).toMatchObject({
+      id: 10,
+      name: "Corp",
+      inactive: false,
+      use: "client",
+      toplevel_id: 0,
+    });
+  });
+
+  it("GET /api/Client/{id} returns a single Area object, not the list envelope", async () => {
+    const j = (await (await req("/api/Client/10")).json()) as Record<string, unknown>;
+    expect(j).toMatchObject({ id: 10, name: "Corp", use: "client" });
+    expect(j.clients).toBeUndefined(); // single object, not the { clients: [...] } envelope
+  });
+
+  it("GET /api/Client/{id} synthesizes a bare object for an unmirrored id (e.g. catch-all)", async () => {
+    const j = (await (await req("/api/Client/99999")).json()) as Record<string, unknown>;
+    expect(j).toMatchObject({ id: 99999, name: "", use: "client" });
+    expect(j.clients).toBeUndefined();
   });
 
   it("GET /api/Users resolves a contact by email", async () => {
@@ -288,12 +310,17 @@ describe("Halo lookups (Gorelo-backed)", () => {
     expect(j.users[0]).toMatchObject({ id: 999999999, client_id: 999 });
   });
 
-  it("GET /api/Site filters by client_id", async () => {
+  it("GET /api/Site filters by client_id, wrapped in the paging envelope", async () => {
     const res = await req("/api/Site?client_id=10");
-    expect(await res.json()).toEqual({
-      sites: [{ id: 100, name: "HQ", client_id: 10 }],
-      record_count: 1,
-    });
+    const j = (await res.json()) as {
+      sites: Array<Record<string, unknown>>;
+      record_count: number;
+      page_no: number;
+      page_size: number;
+    };
+    expect(j).toMatchObject({ record_count: 1, page_no: 1 });
+    expect(typeof j.page_size).toBe("number"); // paging fields present (Site_View)
+    expect(j.sites).toEqual([{ id: 100, name: "HQ", client_id: 10 }]);
   });
 
   it("GET /api/Asset returns the device with its numeric surrogate id", async () => {
@@ -302,9 +329,26 @@ describe("Halo lookups (Gorelo-backed)", () => {
     expect(j.assets[0]).toMatchObject({ id: ASSET_NUM, inventory_number: "pc-01", client_id: 10 });
   });
 
-  it("GET /api/TicketType returns a default type", async () => {
+  it("GET /api/TicketType returns a bare array of full-shape ticket types", async () => {
     const res = await req("/api/TicketType");
-    expect(await res.json()).toEqual([{ id: 3, name: "Incident" }]);
+    const j = (await res.json()) as Array<Record<string, unknown>>;
+    expect(Array.isArray(j)).toBe(true); // bare array (no envelope) — matches Halo
+    expect(j[0]).toMatchObject({ id: 3, name: "Incident", cancreate: true, agentscanselect: true });
+    // Full shape: many fields present so a strict client can't hit undefined.
+    expect(Object.keys(j[0]!).length).toBeGreaterThan(20);
+  });
+
+  it("GET /api/Status returns a full-shape open->closed status set", async () => {
+    const status = (await (await req("/api/Status")).json()) as Array<Record<string, unknown>>;
+    expect(status[0]).toMatchObject({ id: 1, name: "New", type: 0, intent: "open" });
+    expect(Object.keys(status[0]!).length).toBeGreaterThan(20);
+    // A closed/resolved status must exist or a PSA editor's closed-side lookup crashes.
+    expect(status.some((s) => s.type === 2 && /closed|resolved/i.test(String(s.name)))).toBe(true);
+  });
+
+  it("GET /api/Team returns a full-shape bare array", async () => {
+    const team = (await (await req("/api/Team")).json()) as Array<Record<string, unknown>>;
+    expect(team[0]).toMatchObject({ name: "Everyone", forrequests: true });
   });
 });
 
@@ -838,5 +882,71 @@ describe("Halo deferred ticket create (/tickets queues, /actions creates)", () =
     expect(cap.posted()).toMatchObject({ title: "Orphaned", clientId: 10 });
     const row = await env.DB.prepare(`SELECT halo_id FROM pending_tickets WHERE halo_id = 4242`).first();
     expect(row).toBeNull();
+  });
+});
+
+describe("Halo immediate ticket create (one-shot product: Huntress)", () => {
+  // Drive the request as Huntress: its source IP + self-declared User-Agent, with
+  // ENABLE_HUNTRESS on so matchProduct resolves the product.
+  const huntressInit = (bodyObj: unknown): RequestInit => ({
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "user-agent": "Huntress Halo Integration",
+      "CF-Connecting-IP": "52.4.130.244",
+    },
+    body: JSON.stringify(bodyObj),
+  });
+
+  async function withHuntressEnabled(fn: () => Promise<void>): Promise<void> {
+    const e = env as { ENABLE_HUNTRESS?: string };
+    const prev = e.ENABLE_HUNTRESS;
+    e.ENABLE_HUNTRESS = "true";
+    try {
+      await fn();
+    } finally {
+      e.ENABLE_HUNTRESS = prev;
+    }
+  }
+
+  it("creates the Gorelo ticket immediately (no queue) on the /api/Tickets POST", async () => {
+    await withHuntressEnabled(async () => {
+      const cap = captureGoreloCreate();
+      const res = await req(
+        "/api/Tickets",
+        huntressInit([
+          { summary: "Huntress Test", details: "hello world", client_id: "10", tickettype_id: "7045" },
+        ]),
+      );
+      expect(res.status).toBe(201);
+      // Immediate: the Gorelo create fired on this POST (unlike Tier2's deferred path).
+      const posted = cap.posted();
+      expect(posted).toBeDefined();
+      expect(posted).toMatchObject({ title: "Huntress Test", clientId: 10 });
+      // The free-text details land in the description (not the HDB "Report Summary").
+      expect(String(posted!.description)).toContain("hello world");
+      expect(String(posted!.description)).toContain("Details");
+      // Nothing left queued.
+      const row = await env.DB.prepare(`SELECT halo_id FROM pending_tickets`).first();
+      expect(row).toBeNull();
+    });
+  });
+
+  it("falls back to the pending queue if the immediate Gorelo create fails", async () => {
+    await withHuntressEnabled(async () => {
+      routes.push({
+        method: "POST",
+        match: (u) => u.pathname === "/v1/tickets",
+        handler: () => json(500, { error: "boom" }),
+      });
+      const res = await req("/api/Tickets", huntressInit([{ summary: "Huntress Retry", details: "x", client_id: "10" }]));
+      // Still 201 to the caller; the command is queued so the orphan flush retries it.
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as Record<string, unknown>;
+      const row = await env.DB.prepare(`SELECT command FROM pending_tickets WHERE halo_id = ?`)
+        .bind(body.id)
+        .first<{ command: string }>();
+      expect(row).not.toBeNull();
+    });
   });
 });

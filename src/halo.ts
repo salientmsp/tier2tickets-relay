@@ -21,7 +21,8 @@ import { GoreloClient, GoreloError, extractTicketNumber } from "./gorelo.js";
 import { breadcrumb, debug, debugOn, describeError } from "./log.js";
 import { normalizeEmail, normalizeHost } from "./parse.js";
 import { assetNum, syncAll } from "./sync.js";
-import { ipAllowed } from "./tier2.js";
+import { ipAllowed, matchProduct, type Product } from "./products.js";
+import { haloPriority, haloStatus, haloTeam, haloTicketType } from "./haloShapes.js";
 import { signToken, verifyTokenResult } from "./token.js";
 import type {
   CreatePublicTicketCommand,
@@ -92,6 +93,12 @@ export function haloResource(pathname: string): string {
     .map((s) => s.toLowerCase());
   while (segs.length && /^\d+$/.test(segs[segs.length - 1]!)) segs.pop();
   return segs.length ? segs[segs.length - 1]! : "";
+}
+
+/** Trailing numeric path segment — Halo's `/Client/{id}` etc. — or null. */
+export function trailingId(pathname: string): number | null {
+  const seg = pathname.split("/").filter(Boolean).pop() ?? "";
+  return /^\d+$/.test(seg) ? Number(seg) : null;
 }
 
 /** Fallback path matcher (primary routing is the halo-app-name header). */
@@ -221,6 +228,28 @@ async function handleToken(request: Request, env: Env, url: URL, body: string): 
 
 // --- Lookups (GET) ----------------------------------------------------------
 
+/** Honor Halo's `page_size` (bounded), defaulting to the prior 100-row cap when absent. */
+function pageSize(url: URL, fallback = 100, max = 5000): number {
+  const n = Number(url.searchParams.get("page_size"));
+  return Number.isInteger(n) && n > 0 ? Math.min(n, max) : fallback;
+}
+
+/**
+ * Halo's `*_View` list envelope: `{ page_no, page_size, record_count, columns, <items> }`.
+ * A paginating Halo client (Huntress) reads page_no/page_size back to drive its loop,
+ * so every wrapped list endpoint (Client/Site/Asset/Users) must echo them — omitting
+ * them was what crashed Huntress on /Client. `extra` carries the entity array (e.g.
+ * `{ clients }`) plus its `record_count` and any endpoint-specific arrays.
+ */
+function listEnvelope(url: URL, extra: Record<string, unknown>): Record<string, unknown> {
+  return {
+    page_no: Number(url.searchParams.get("page_no")) || 1,
+    page_size: pageSize(url),
+    columns: [],
+    ...extra,
+  };
+}
+
 /** Grab the search term Tier2 sent (Halo uses `search`; also accept an email-ish param). */
 function searchTerm(url: URL): string {
   const s = url.searchParams.get("search");
@@ -272,7 +301,7 @@ async function handleUsers(env: Env, url: URL): Promise<Response> {
       client_id: Number(env.CATCHALL_CLIENT_ID),
       site_id: 0,
     });
-    return jsonResponse(200, { users: [user], record_count: 1 });
+    return jsonResponse(200, listEnvelope(url, { record_count: 1, users: [user], user_ids: [] }));
   }
 
   const rows = email.includes("@")
@@ -289,13 +318,35 @@ async function handleUsers(env: Env, url: URL): Promise<Response> {
       }),
     ),
   );
-  return jsonResponse(200, { users, record_count: users.length });
+  return jsonResponse(200, listEnvelope(url, { record_count: users.length, users, user_ids: [] }));
+}
+
+/** One Halo "client" (Area_List-ish) object — the fields our list already exposes. */
+function clientObject(id: number, name: string): Record<string, unknown> {
+  return { id, name, colour: "", inactive: false, toplevel_id: 0, toplevel_name: "", use: "client" };
+}
+
+/**
+ * GET /Client/{id} — Halo returns a SINGLE Area object here (not the list envelope
+ * /Client returns). Huntress fetches its configured/catch-all client this way and
+ * reads fields off the object directly, so returning the list crashes it. Resolve
+ * the name from the mirror; synthesize a bare object if the id isn't mirrored (e.g.
+ * the catch-all client) rather than 404, so a saved config reference still loads.
+ */
+async function handleClientById(env: Env, id: number): Promise<Response> {
+  const name = (await getClientName(env.DB, id)) ?? "";
+  return jsonResponse(200, clientObject(id, name));
 }
 
 async function handleClient(env: Env, url: URL): Promise<Response> {
-  const rows = await listClientRows(env.DB, searchTerm(url));
-  const clients = rows.map((c) => ({ id: c.id, name: c.name ?? "" }));
-  return jsonResponse(200, { clients, record_count: clients.length });
+  const rows = await listClientRows(env.DB, searchTerm(url), pageSize(url));
+  // Fuller Halo "client" (Area_List) shape. Tier2's parser was happy with
+  // { id, name }, but a stricter Halo client (e.g. Huntress) deserializes each row
+  // into a typed model and needs the standard fields present. Extra fields are
+  // ignored by simpler consumers, so this stays backward-compatible.
+  const clients = rows.map((c) => clientObject(c.id, c.name ?? ""));
+  // Envelope mirrors Halo's Area_View (docs/halo-swagger.v2.json).
+  return jsonResponse(200, listEnvelope(url, { record_count: clients.length, clients }));
 }
 
 async function handleSite(env: Env, url: URL): Promise<Response> {
@@ -307,7 +358,7 @@ async function handleSite(env: Env, url: URL): Promise<Response> {
     searchTerm(url),
   );
   const sites = rows.map((l) => ({ id: l.id, name: l.name ?? "", client_id: l.client_id ?? 0 }));
-  return jsonResponse(200, { sites, record_count: sites.length });
+  return jsonResponse(200, listEnvelope(url, { record_count: sites.length, sites }));
 }
 
 async function handleAsset(env: Env, url: URL): Promise<Response> {
@@ -326,32 +377,47 @@ async function handleAsset(env: Env, url: URL): Promise<Response> {
     site_id: d.location_id ?? 0,
     inactive: false,
   }));
-  return jsonResponse(200, { assets, record_count: assets.length });
+  return jsonResponse(200, listEnvelope(url, { record_count: assets.length, assets }));
 }
 
-/** Minimal config lists so Tier2 can resolve default ids. Refine from captures. */
+/**
+ * Config lookup lists. Halo returns these as BARE ARRAYS of full objects (no
+ * envelope, unlike /Client). Each item is the full Halo shape (src/haloShapes.ts,
+ * derived from the swagger) so a strict client's editor can't hit an undefined
+ * field or filter the list to empty. These are picker options only — ticket
+ * creation still uses the DEFAULT_* ids from wrangler.toml.
+ */
 function handleConfig(env: Env, resource: string): Response {
   switch (resource) {
     case "tickettype":
     case "tickettypes":
-      return jsonResponse(200, [{ id: Number(env.DEFAULT_TYPE_ID), name: "Incident" }]);
+      return jsonResponse(200, [haloTicketType(Number(env.DEFAULT_TYPE_ID), "Incident")]);
     case "status":
     case "statuses":
-      return jsonResponse(200, [{ id: Number(env.DEFAULT_STATUS_ID), name: "New" }]);
+      // A realistic open->closed spread (not just "New"): a PSA editor maps a
+      // "new" AND a "closed/resolved" status, and a single status crashes the
+      // closed-side lookup. type: 0=open, 1=pending, 2=closed; intent mirrors it.
+      // Creation still uses DEFAULT_STATUS_ID; these are picker options.
+      return jsonResponse(200, [
+        haloStatus(Number(env.DEFAULT_STATUS_ID) || 1, "New", 0, "open"),
+        haloStatus(2, "In Progress", 0, "open"),
+        haloStatus(3, "Resolved", 2, "closed"),
+        haloStatus(4, "Closed", 2, "closed"),
+      ]);
     case "team":
     case "teams":
-      return jsonResponse(200, [{ id: Number(env.DEFAULT_GROUP_ID), name: "Everyone" }]);
+      return jsonResponse(200, [haloTeam(Number(env.DEFAULT_GROUP_ID), "Everyone")]);
     case "priority":
     case "priorities":
       return jsonResponse(200, [
-        { id: 1, name: "Critical" },
-        { id: 2, name: "High" },
-        { id: 3, name: "Medium" },
-        { id: 4, name: "Low" },
+        haloPriority(1, "Critical"),
+        haloPriority(2, "High"),
+        haloPriority(3, "Medium"),
+        haloPriority(4, "Low"),
       ]);
     case "agent":
     case "agents":
-      return jsonResponse(200, { agents: [], record_count: 0 });
+      return jsonResponse(200, { agents: [], record_count: 0, page_no: 1, page_size: 100 });
     default:
       return jsonResponse(200, []);
   }
@@ -512,7 +578,7 @@ interface Routing {
   report: Record<string, string>;
 }
 
-async function resolveRouting(env: Env, t: HaloTicket): Promise<Routing> {
+async function resolveRouting(env: Env, t: HaloTicket, product: Product | null): Promise<Routing> {
   const html = str(t.details_html) || str(t.details);
   const report = parseReport(html);
   const email = requesterEmail(t) || reportEmail(report, html);
@@ -567,7 +633,8 @@ async function resolveRouting(env: Env, t: HaloTicket): Promise<Routing> {
   // ticket shows the machine detail HDB keeps behind its portal link. Best-effort.
   const agentDetail = device?.agent_id ? await new GoreloClient(env).getAgent(device.agent_id) : null;
 
-  const contactName = contact?.name || report.name || email || "Helpdesk Buttons";
+  const contactName =
+    contact?.name || report.name || email || product?.ticketCreatedBy || "Helpdesk Buttons";
   // A press flagged as an emergency bumps the ticket priority.
   const isEmergency = /this is an emergency/i.test(html);
 
@@ -617,6 +684,7 @@ const DUMP_SKIP = new Set([
   "user_id",
   "client_id",
   "site_id",
+  "tickettype_id",
   "assets",
 ]);
 
@@ -785,11 +853,13 @@ function extraFieldLines(t: HaloTicket): string[] {
 }
 
 /** Build the ticket description as HTML: report + extra fields + device + routing. */
-function buildHaloDescription(t: HaloTicket, routing: Routing): string {
+function buildHaloDescription(t: HaloTicket, routing: Routing, product: Product | null): string {
   const raw = str(t.details_html) || str(t.details) || str(t.summary);
   const sections: string[] = [];
 
-  // Report Summary — one line per field; non-default selections as bullets.
+  // Body section — one line per report field (non-default selections as bullets) for
+  // Tier2's HDB report, or the plain details for a product that sends free text. The
+  // heading follows the product (Tier2 "Report Summary", else e.g. "Details").
   const pairs = parseReportPairs(raw);
   const rows = pairs
     .filter((p) => p.label.toLowerCase() !== "selections")
@@ -801,7 +871,7 @@ function buildHaloDescription(t: HaloTicket, routing: Routing): string {
   const report = rows.length
     ? rows.join("<br>")
     : esc(truncate(htmlToText(raw), BODY_MAX)).replace(/\n/g, "<br>");
-  sections.push(`${heading("Report Summary")}<br>${report}`);
+  sections.push(`${heading(product?.ticketBodyHeading || "Report Summary")}<br>${report}`);
 
   // Any other submitted fields (rarely present after trimming the routing ids).
   const extras = extraFieldLines(t);
@@ -837,7 +907,12 @@ function extractNoteLinks(html: string): Array<{ label: string; href: string }> 
   return out;
 }
 
-function buildTicketCommand(env: Env, t: HaloTicket, routing: Routing): CreatePublicTicketCommand {
+function buildTicketCommand(
+  env: Env,
+  t: HaloTicket,
+  routing: Routing,
+  product: Product | null,
+): CreatePublicTicketCommand {
   const summary = str(t.summary) || str(t.subject) || "(no subject)";
   const tagId = num(env.HDB_TAG_ID);
   // "This is an emergency" bumps the priority (when EMERGENCY_PRIORITY is set).
@@ -849,7 +924,7 @@ function buildTicketCommand(env: Env, t: HaloTicket, routing: Routing): CreatePu
     clientId: routing.clientId,
     locationId: routing.locationId,
     contactId: routing.contactId,
-    description: buildHaloDescription(t, routing),
+    description: buildHaloDescription(t, routing, product),
     statusId: Number(env.DEFAULT_STATUS_ID),
     groupId: Number(env.DEFAULT_GROUP_ID),
     typeId: Number(env.DEFAULT_TYPE_ID),
@@ -871,22 +946,8 @@ function buildTicketCommand(env: Env, t: HaloTicket, routing: Routing): CreatePu
  * id we return, and let the /actions note fold in before the create. An orphan
  * flush (cron + opportunistic) creates any ticket whose note never arrives.
  */
-async function handleCreateTicket(env: Env, ctx: ExecutionContext | undefined, body: string): Promise<Response> {
-  const t = firstTicket(parseJson(body));
-  const routing = await resolveRouting(env, t);
-  const cmd = buildTicketCommand(env, t, routing);
-
-  const haloId = assetNum(crypto.randomUUID()) || Date.now() % 1_000_000_000_000;
-  await putPendingTicket(env.DB, haloId, JSON.stringify(cmd), nowIso());
-  breadcrumb(
-    `HALO queued ticket halo_id=${haloId} client=${routing.clientId} contact=${routing.contactId} ` +
-      `assets=${routing.agentAssetIds.length} email=${cmd.sendTicketCreatedEmail ? "y" : "n"}`,
-  );
-
-  // Opportunistically flush older orphans in the background (no-op when empty).
-  ctx?.waitUntil(flushPendingTickets(env).catch((e) => breadcrumb(`HALO opportunistic flush failed ${describeError(e)}`)));
-
-  // Echo a Halo-shaped created ticket so Tier2 can display/correlate it.
+/** Echo a Halo-shaped created ticket (the 201 Faults object) so the caller can correlate. */
+function haloCreatedTicket(env: Env, haloId: number, cmd: CreatePublicTicketCommand, t: HaloTicket, routing: Routing): Response {
   return jsonResponse(201, {
     id: haloId,
     summary: cmd.title,
@@ -897,6 +958,53 @@ async function handleCreateTicket(env: Env, ctx: ExecutionContext | undefined, b
     tickettype_id: Number(env.DEFAULT_TYPE_ID),
     status_id: Number(env.DEFAULT_STATUS_ID),
   });
+}
+
+async function handleCreateTicket(
+  env: Env,
+  ctx: ExecutionContext | undefined,
+  body: string,
+  product: Product | null,
+): Promise<Response> {
+  const t = firstTicket(parseJson(body));
+  const routing = await resolveRouting(env, t, product);
+  const cmd = buildTicketCommand(env, t, routing, product);
+  const haloId = assetNum(crypto.randomUUID()) || Date.now() % 1_000_000_000_000;
+
+  // One-shot products (deferCreate=false, e.g. Huntress) send the whole ticket here
+  // and never follow up with a /actions note, so there is nothing to fold in — create
+  // the Gorelo ticket immediately. On failure, fall back to the pending queue so the
+  // orphan flush retries it (same resilience as the deferred path below).
+  if (product && !product.deferCreate) {
+    try {
+      const raw = await new GoreloClient(env).createTicket(cmd);
+      const uuid = extractTicketNumber(raw) ?? "";
+      breadcrumb(
+        `HALO created gorelo ticket ${uuid} immediately (product=${product.key} halo_id=${haloId} ` +
+          `client=${routing.clientId} contact=${routing.contactId} email=${cmd.sendTicketCreatedEmail ? "y" : "n"})`,
+      );
+    } catch (err) {
+      await putPendingTicket(env.DB, haloId, JSON.stringify(cmd), nowIso());
+      breadcrumb(
+        `HALO immediate create failed (product=${product.key} halo_id=${haloId}), queued for retry: ${describeError(err)}`,
+      );
+    }
+    return haloCreatedTicket(env, haloId, cmd, t, routing);
+  }
+
+  // Tier2 two-step flow: DON'T create yet. Queue the command keyed by the Halo id we
+  // return; the /actions note folds in before the create, else the orphan flush
+  // (cron + opportunistic) creates it note-less after the grace window.
+  await putPendingTicket(env.DB, haloId, JSON.stringify(cmd), nowIso());
+  breadcrumb(
+    `HALO queued ticket halo_id=${haloId} client=${routing.clientId} contact=${routing.contactId} ` +
+      `assets=${routing.agentAssetIds.length} email=${cmd.sendTicketCreatedEmail ? "y" : "n"}`,
+  );
+
+  // Opportunistically flush older orphans in the background (no-op when empty).
+  ctx?.waitUntil(flushPendingTickets(env).catch((e) => breadcrumb(`HALO opportunistic flush failed ${describeError(e)}`)));
+
+  return haloCreatedTicket(env, haloId, cmd, t, routing);
 }
 
 /** Parse "...ticket number 264274883401817..." out of a note's text. */
@@ -1143,7 +1251,7 @@ async function handleApi(
   const method = request.method;
 
   if (resource === "ticket" || resource === "tickets") {
-    if (method === "POST") return handleCreateTicket(env, ctx, body);
+    if (method === "POST") return handleCreateTicket(env, ctx, body, matchProduct(request, env));
     return jsonResponse(200, { tickets: [], record_count: 0 });
   }
   if (resource === "action" || resource === "actions") {
@@ -1153,7 +1261,11 @@ async function handleApi(
   }
   if (method === "GET") {
     if (resource === "users") return handleUsers(env, url);
-    if (resource === "client" || resource === "clients") return handleClient(env, url);
+    if (resource === "client" || resource === "clients") {
+      // /Client/{id} -> single Area object; /Client -> the list envelope.
+      const id = trailingId(url.pathname);
+      return id != null ? handleClientById(env, id) : handleClient(env, url);
+    }
     if (resource === "site" || resource === "sites") return handleSite(env, url);
     if (resource === "asset" || resource === "assets") return handleAsset(env, url);
     return handleConfig(env, resource);
@@ -1183,7 +1295,7 @@ export async function handleHalo(
   const body = await logCapture(request, url, env);
 
   if (!ipAllowed(request, env)) {
-    breadcrumb("HALO rejected: source IP not allowlisted");
+    breadcrumb("HALO rejected: no enabled product matched (source IP / User-Agent)");
     return jsonResponse(403, { error: "forbidden" });
   }
 

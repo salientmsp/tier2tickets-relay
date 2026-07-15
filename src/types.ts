@@ -17,6 +17,11 @@ export interface Env {
   // vars
   GORELO_BASE_URL: string;
   ENFORCE_IP_ALLOWLIST: string; // "true" | "false"
+  // Per-product allowlist toggles (see src/products.ts PRODUCTS). "true" enables
+  // that product's source IPs/CIDRs; unset falls back to the product's built-in
+  // default (tier2 on, huntress off — backward-compatible).
+  ENABLE_TIER2?: string; // "true" | "false" (default true)
+  ENABLE_HUNTRESS?: string; // "true" | "false" (default false)
   DEFAULT_GROUP_ID: string; // int as string
   DEFAULT_TYPE_ID: string; // int as string
   DEFAULT_STATUS_ID: string; // int as string (REQUIRED by Gorelo's validator)
