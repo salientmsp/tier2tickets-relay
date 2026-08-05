@@ -131,6 +131,40 @@ SEND_TICKET_CREATED_EMAIL = "true"
 # contain PII/PHI (names, emails, phones) — only for short debugging windows.
 DEBUG_LOGS = "false"
 
+# --- Monitoring alerts endpoint (POST /v1/alerts) ---------------------------------
+# A generic HTTPS ingress for monitoring sources (e.g. an on-prem Windows/SQL Server)
+# to raise/update/resolve alerts in Gorelo. Each "source" (a customer) is TWO-FACTOR:
+# it has its own shared secret bound to its own IP allowlist, so a request must present
+# that source's secret AND come from that source's IP(s) — a wrong secret is 401, a
+# valid secret from the wrong IP is 403. See README "Monitoring alerts".
+#
+# ALERT_SOURCES lists the source keys (unset => just the built-in `default`). Per key:
+#   default -> ALERT_SHARED_SECRET (secret) + ALERT_ALLOWED_IPS (var, below)
+#   <key>   -> ALERT_SECRET_<KEY>  (secret) + ALERT_IPS_<KEY>    (var)
+#             (KEY = the key upper-cased, non-alphanumerics -> "_")
+# Per-source vars are read by name, so add a customer WITHOUT a code change: append its
+# key here, set ALERT_IPS_<KEY> below, and `wrangler secret put ALERT_SECRET_<KEY>`.
+# ALERT_SOURCES = "default, acme"
+#
+# `default` source IPs: exact IPs and/or IPv4 CIDR ranges (comma/space/newline separated,
+# matched via CF-Connecting-IP). Enforced only while ENFORCE_IP_ALLOWLIST is on; empty
+# while enforced => the default source is rejected. Add the source's public egress IP,
+# e.g. the NAT/egress address the monitoring host dials out from.
+ALERT_ALLOWED_IPS = ""
+# Per-customer source IP allowlists (paired with the ALERT_SECRET_<KEY> secret). Each is
+# a LIST — any mix of exact IPs and IPv4 CIDR ranges/subnets, comma/space/newline separated:
+# ALERT_IPS_ACME = "203.0.113.7, 198.51.100.0/24, 192.0.2.0/28"
+# Optional Gorelo client id alert tickets are filed under. Unset => the alert's
+# `customer` is matched by exact name against the client mirror, else CATCHALL_CLIENT_ID.
+# ALERT_CLIENT_ID = "15567"
+# Optional Gorelo tag id applied to alert tickets. Unset => FALLBACK_TAG_ID.
+# ALERT_TAG_ID = "32885"
+# Optional per-severity Gorelo priority overrides. Unset => critical -> EMERGENCY_PRIORITY|1,
+# warning -> DEFAULT_PRIORITY|2, info -> 4 (PublicTicketPriority enum [0..4]).
+# ALERT_PRIORITY_CRITICAL = "1"
+# ALERT_PRIORITY_WARNING = "2"
+# ALERT_PRIORITY_INFO = "4"
+
 # Bearer-token enforcement on the Halo resource endpoints (audit F1). Only takes
 # effect when BOTH HALO_CLIENT_ID and HALO_CLIENT_SECRET secrets are set; the
 # gate is skipped entirely otherwise, and /token is always exempt.
@@ -161,6 +195,8 @@ HALO_TOKEN_ENFORCE = "enforce"
 #   wrangler secret put ADMIN_KEY           # gates POST /admin/sync (X-Admin-Key / X-API-Key / Authorization: Bearer)
 #   wrangler secret put NOTIFLY_URLS        # optional: notifly (Apprise) URL(s) alerted when a ticket is dead-lettered
 #                                           #   e.g. "ntfy://alerts" | Teams Workflows "workflows://…&sig=…" — comma/space separated
+#   wrangler secret put ALERT_SHARED_SECRET # `default` source secret for POST /v1/alerts (Bearer / X-Alert-Key)
+#   wrangler secret put ALERT_SECRET_<KEY>  # per-customer source secret (one per ALERT_SOURCES key, paired with ALERT_IPS_<KEY>)
 # Per-product Halo mock OAuth secrets (issue #51) — one client_secret per product,
 # paired with the client_id var above. Easiest: ./scripts/halo-cred.sh <product>
 #   (Windows PowerShell: ./scripts/halo-cred.ps1 <product>)

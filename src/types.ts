@@ -50,12 +50,45 @@ export interface Env {
   SEND_TICKET_CREATED_EMAIL?: string;
   DEBUG_LOGS?: string; // "true" enables verbose HALO CAPTURE/RESPONSE body logging (PII)
 
+  // --- Monitoring alerts endpoint (POST /v1/alerts) ---------------------------
+  // Each alert "source" (a customer) has its OWN shared secret bound to its OWN IP
+  // allowlist: a request must present the source's secret AND originate from that
+  // source's IP(s), so one customer's secret is useless from another's network.
+  //
+  // ALERT_SOURCES is a comma/space-separated list of source keys (unset => the single
+  // built-in `default`). Per key the credential pair is resolved by name (see
+  // src/alerts.ts sourceVars): `default` -> ALERT_SHARED_SECRET + ALERT_ALLOWED_IPS;
+  // any other key `<k>` -> ALERT_SECRET_<K> (secret) + ALERT_IPS_<K> (var), with the
+  // key upper-cased and non-alphanumerics replaced by `_`. Those per-source vars are
+  // read dynamically by name, so onboarding a customer needs no code/type change —
+  // just set the two vars and add the key to ALERT_SOURCES.
+  ALERT_SOURCES?: string;
+  // `default` source: exact IPs and/or IPv4 CIDR ranges (comma/space/newline separated)
+  // permitted to POST alerts (matched via CF-Connecting-IP). Enforced only when
+  // ENFORCE_IP_ALLOWLIST is on; empty while enforced => the source is rejected.
+  ALERT_ALLOWED_IPS?: string;
+  // Optional Gorelo client id alert tickets are filed under. Unset => resolve the
+  // alert's `customer` against the client mirror by exact name, else CATCHALL_CLIENT_ID.
+  ALERT_CLIENT_ID?: string; // int as string
+  // Optional Gorelo tag id applied to alert tickets. Unset => FALLBACK_TAG_ID.
+  ALERT_TAG_ID?: string; // int as string
+  // Optional per-severity Gorelo priority overrides. Unset => derived defaults
+  // (critical -> EMERGENCY_PRIORITY|1, warning -> DEFAULT_PRIORITY|2, info -> 4).
+  ALERT_PRIORITY_CRITICAL?: string; // PublicTicketPriority int as string
+  ALERT_PRIORITY_WARNING?: string; // int as string
+  ALERT_PRIORITY_INFO?: string; // int as string
+
   // secrets (wrangler secret put ...)
   GORELO_API_KEY: string; // X-API-Key sent to Gorelo
   ADMIN_KEY: string; // gates POST /admin/sync
   // Optional notifly (Apprise-style) URLs alerted when a ticket is dead-lettered.
   // Comma/space/newline separated, e.g. "ntfy://alerts, msteams://…, slack://…".
   NOTIFLY_URLS?: string;
+  // Shared secret for the `default` alert source (POST /v1/alerts). Accepted as
+  // `Authorization: Bearer <secret>` (preferred) or `X-Alert-Key: <secret>`; valid only
+  // from an ALERT_ALLOWED_IPS address. Unset => the default source can't authenticate.
+  // Additional per-customer secrets are set as ALERT_SECRET_<KEY> (read dynamically).
+  ALERT_SHARED_SECRET?: string;
 
   // Per-product Halo mock OAuth credentials (issue #51). Each product authenticates
   // with its OWN client_id, so credentials are resolved per matched product via the

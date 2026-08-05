@@ -7,6 +7,17 @@ GORELO_API_KEY="your-gorelo-api-key"
 # Gates POST /admin/sync (sent as X-Admin-Key, X-API-Key, or Authorization: Bearer).
 ADMIN_KEY="another-long-random-secret"
 
+# Monitoring-alert ingress (POST /v1/alerts). Each source (customer) has its own secret
+# bound to its own IPs: a request must present the source's secret (Authorization: Bearer
+# <secret> or X-Alert-Key: <secret>) AND come from that source's allowlisted IP.
+#
+# The built-in `default` source uses this secret + ALERT_ALLOWED_IPS:
+ALERT_SHARED_SECRET="a-long-random-alert-secret"
+# Add customers via ALERT_SOURCES + per-key vars (read by name), e.g.:
+# ALERT_SOURCES="default, acme"
+# ALERT_SECRET_ACME="another-long-random-secret"   # in prod: wrangler secret put ALERT_SECRET_ACME
+# ALERT_IPS_ACME="198.51.100.0/24"                 # set alongside in wrangler.toml [vars]
+
 # Optional: notifly (Apprise-style) URL(s) alerted when a queued ticket is
 # dead-lettered (dropped after MAX_PENDING_ATTEMPTS failed Gorelo creates). One or
 # more, comma/space separated. Leave unset to only log the drop.

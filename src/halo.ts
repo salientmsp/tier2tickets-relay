@@ -117,6 +117,9 @@ export function isHaloRequest(request: Request, pathname: string): boolean {
   // which otherwise routes an admin call into Halo and rejects it on the IP
   // allowlist. Unknown paths here should 404, not masquerade as Halo.
   if (pathname.startsWith("/admin/") || pathname === "/health") return false;
+  // The monitoring-alert ingress is handled by the fetch router and must never fall
+  // through to the IP/UA-gated Halo mock, even if a caller sets the halo-app-name header.
+  if (pathname === "/v1/alerts" || pathname.startsWith("/v1/alerts/")) return false;
   return request.headers.get(HALO_HEADER) != null || isHaloPath(pathname);
 }
 

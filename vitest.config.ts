@@ -39,6 +39,9 @@ export default defineConfig({
           NOTIFLY_URLS: "jsons://hooks.example.com/dead-letter",
           HALO_CLIENT_ID: "halo-test-id",
           HALO_CLIENT_SECRET: "halo-test-secret",
+          // Monitoring-alert ingress (POST /v1/alerts). IP allowlist is off in tests
+          // (ENFORCE_IP_ALLOWLIST=false), so only the shared secret gates the endpoint.
+          ALERT_SHARED_SECRET: "alert-test-secret",
         },
       },
     }),

@@ -1,3 +1,4 @@
+import { alertHealth, handleAlert } from "./alerts.js";
 import { getLastSync, getSyncMeta, initSchema, mirrorCounts, setSyncMeta } from "./db.js";
 import { GoreloClient } from "./gorelo.js";
 import { flushPendingTickets, handleHalo, isHaloRequest, postSyncFailure, testNotifly } from "./halo.js";
@@ -106,6 +107,18 @@ export default {
     if (url.pathname === "/health") {
       if (request.method !== "GET" && request.method !== "HEAD") return methodNotAllowed("GET, HEAD");
       return textResponse(200, "ok");
+    }
+
+    // Monitoring alert ingress (POST) + its own JSON health descriptor. Handled
+    // explicitly here so it never falls through to the IP/UA-gated Halo mock; the
+    // handler enforces its own IP allowlist + shared secret and speaks the alert
+    // JSON contract for every response (including 405). See src/alerts.ts.
+    if (url.pathname === "/v1/alerts") {
+      return handleAlert(request, env);
+    }
+    if (url.pathname === "/v1/alerts/health") {
+      if (request.method !== "GET" && request.method !== "HEAD") return methodNotAllowed("GET, HEAD");
+      return alertHealth();
     }
 
     // HaloPSA/ITSM mock (OAuth token + resource server) — the sole integration

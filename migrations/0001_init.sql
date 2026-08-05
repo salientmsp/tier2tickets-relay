@@ -56,3 +56,37 @@ CREATE TABLE IF NOT EXISTS pending_tickets (
   attempts   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_pending_created ON pending_tickets (created_at);
+
+-- Monitoring alerts (POST /v1/alerts). One row per stable `dedupe_key`; `status` is
+-- our own 'open'|'resolved' lifecycle (Gorelo has no ticket-update/close API), and
+-- `last_event_id` is the last processed Idempotency-Key/event_id for replay safety.
+CREATE TABLE IF NOT EXISTS alerts (
+  dedupe_key     TEXT PRIMARY KEY,
+  monitor_id     TEXT,
+  source         TEXT,
+  host           TEXT,
+  customer       TEXT,
+  severity       TEXT,
+  status         TEXT NOT NULL DEFAULT 'open',
+  title          TEXT,
+  message        TEXT,
+  gorelo_id      TEXT,
+  number         INTEGER,
+  display_number TEXT,
+  last_event_id  TEXT,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL,
+  resolved_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts (status);
+
+-- Monitor heartbeats (status='heartbeat' events) — last_seen per dedupe_key, no ticket.
+CREATE TABLE IF NOT EXISTS alert_heartbeats (
+  dedupe_key TEXT PRIMARY KEY,
+  monitor_id TEXT,
+  source     TEXT,
+  host       TEXT,
+  customer   TEXT,
+  last_seen  TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
