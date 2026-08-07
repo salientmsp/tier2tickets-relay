@@ -10,10 +10,5 @@
     "schedule": ["* 0-5 * * *"],
     "automerge": true,
     "commitMessageAction": "Refresh lock file"
-  },
-  "postUpgradeTasks": {
-    "commands": ["npm approve-scripts workerd esbuild"],
-    "fileFilters": ["package.json"],
-    "executionMode": "branch"
   }
 }

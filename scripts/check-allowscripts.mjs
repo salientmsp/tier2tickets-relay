@@ -1,10 +1,12 @@
-// Guard: keep package.json `allowScripts` in sync with the locked versions of the
-// dependencies whose install scripts we allow under npm v12 (which blocks dependency
-// install scripts by default). `allowScripts` is keyed by exact `name@version`, so a
-// Renovate bump to any of these silently invalidates the entry until it's refreshed —
-// which would leave the dev container unable to build workerd/esbuild. This check reads
-// the LOCKFILE (deterministic; matches what `npm ci` installs) and fails with the exact
-// remediation when an entry is missing. Run in CI and locally (`npm run check:allowscripts`).
+// Guard: keep package.json `allowScripts` covering the dependencies whose install
+// scripts we allow under npm v12 (which blocks dependency install scripts by default).
+// `allowScripts` is keyed by bare package NAME (not `name@version`), matching the
+// convention every comparable tool uses (pnpm `onlyBuiltDependencies`, bun
+// `trustedDependencies`): the allowlist is decided per package, not per version, so a
+// Renovate version bump never invalidates it and no post-upgrade regeneration step is
+// needed. This check verifies each required package is present in the LOCKFILE
+// (deterministic; matches what `npm ci` installs) and allowlisted by name, failing with
+// the exact remediation otherwise. Run in CI and locally (`npm run check:allowscripts`).
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -21,16 +23,13 @@ const lock = read("package-lock.json");
 const allow = read("package.json").allowScripts ?? {};
 
 const problems = [];
-const expected = [];
 for (const name of PACKAGES) {
   const version = lock.packages?.[`node_modules/${name}`]?.version;
   if (!version) {
     problems.push(`${name}: not found in package-lock.json`);
     continue;
   }
-  const key = `${name}@${version}`;
-  expected.push(key);
-  if (allow[key] !== true) problems.push(`missing allowScripts entry "${key}": true`);
+  if (allow[name] !== true) problems.push(`missing allowScripts entry "${name}": true`);
 }
 
 if (problems.length) {
@@ -38,9 +37,9 @@ if (problems.length) {
     "allowScripts is out of sync with package-lock.json:\n" +
       problems.map((p) => `  - ${p}`).join("\n") +
       "\n\nnpm v12 blocks these install scripts otherwise, breaking the dev container.\n" +
-      `Fix: run \`npm approve-scripts ${PACKAGES.join(" ")}\` and commit package.json.\n` +
-      `Expected: ${expected.map((k) => `"${k}": true`).join(", ")}`,
+      `Fix: add ${PACKAGES.map((n) => `"${n}": true`).join(", ")} to package.json ` +
+      `"allowScripts" and commit it.`,
   );
   process.exit(1);
 }
-console.log(`allowScripts OK: ${expected.join(", ")}`);
+console.log(`allowScripts OK: ${PACKAGES.join(", ")}`);

@@ -189,16 +189,14 @@ Local DB helpers: `npm run db:migrate:local`, `npm run db:seed:local`, and
 
 npm v12 blocks dependency install scripts by default. `workerd` (wrangler dev's
 runtime) and `esbuild` (the bundler) need theirs, so they're allowlisted in
-`package.json` → `allowScripts`. That field is keyed by exact `name@version`, so a
-Renovate bump to either would invalidate it — two things keep it honest:
+`package.json` → `allowScripts`, keyed by bare package **name** (like pnpm's
+`onlyBuiltDependencies` and bun's `trustedDependencies`). Name keys don't embed a
+version, so a Renovate bump to either package never invalidates the allowlist and no
+regeneration step is needed.
 
-- **CI guard** (`npm run check:allowscripts`) fails the build if `allowScripts` drifts
-  from the locked versions, printing the one-line fix.
-- **Renovate** re-runs `npm approve-scripts` after updates (`postUpgradeTasks` in
-  `renovate.json`) to refresh the field automatically. This requires post-upgrade
-  commands to be **enabled/allowlisted in your Renovate (Mend) settings** (allow
-  `npm approve-scripts`); until then the CI guard is the backstop and the manual fix is
-  `npm approve-scripts workerd esbuild` (commit `package.json`).
+A **CI guard** (`npm run check:allowscripts`) keeps it honest: it fails the build if
+`workerd`/`esbuild` are present in the lockfile but missing from `allowScripts`,
+printing the one-line fix (add `"<name>": true` and commit `package.json`).
 
 ## Helpdesk Buttons portal setup
 
@@ -486,7 +484,7 @@ Events map to Gorelo's **native alert** endpoint — `POST /v1/alerts/` (`PostAl
 |---|---|
 | `title` | `Name` |
 | `host` | `Resource` (the host/service the alert is raised for) |
-| `severity` | `Severity` (`AlertLevel` int 1–4) — `info`→`ALERT_LEVEL_INFO`\|1, `warning`→`ALERT_LEVEL_WARNING`\|2, `critical`→`ALERT_LEVEL_CRITICAL`\|3. **TODO(verify)** which int is which in the Gorelo UI (unlabeled enum) |
+| `severity` | `Severity` (`AlertLevel` int) — **fixed** mapping (Gorelo's level enum is not tenant-customizable): `critical`→1 (Critical), `warning`→3 (Warning), `info`→4 (Info/Low). 1 = Critical is confirmed against the Gorelo alerts UI. |
 | `message` + `details` + metadata (monitor/source/customer/timestamp/`dedupe_key`) | `Description` (plain text) |
 | `customer` / `host` | `ClientId` — `ALERT_CLIENT_ID`, else `customer` matched by exact name against the client mirror, else a mirrored device matched by `host`, else `CATCHALL_CLIENT_ID` |
 

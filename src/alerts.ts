@@ -229,22 +229,21 @@ function validateAlert(parsed: unknown): { alert: Alert } | { error: string } {
 // --- Gorelo mapping (native alerts: POST /v1/alerts/) -----------------------
 
 /**
- * Map an alert severity to Gorelo's AlertLevel (unlabeled int 1–4). Default
- * info->1, warning->2, critical->3; overridable via ALERT_LEVEL_{INFO,WARNING,
- * CRITICAL}. TODO(verify): confirm which int is which level in the Gorelo UI.
+ * Map an alert severity to Gorelo's AlertLevel. Gorelo's level enum is FIXED (not
+ * tenant-customizable), so the mapping is hardcoded rather than env-configurable:
+ * 1 = Critical (confirmed against the Gorelo alerts UI), 3 = Warning, 4 = Info/Low.
+ * (2 = Error/High is left for a future tier the relay doesn't emit.) The relay's three
+ * input severities map to distinct, correctly-ordered levels — critical is the most
+ * severe (1), info the least (4).
  */
-function alertLevel(env: Env, severity: string): AlertLevel {
-  const pick = (v: string | undefined, fallback: number): AlertLevel => {
-    const n = Number(v);
-    return (Number.isInteger(n) && n >= 1 && n <= 4 ? n : fallback) as AlertLevel;
-  };
+function alertLevel(severity: string): AlertLevel {
   switch (severity) {
     case "critical":
-      return pick(env.ALERT_LEVEL_CRITICAL, 3);
+      return 1; // Critical
     case "warning":
-      return pick(env.ALERT_LEVEL_WARNING, 2);
+      return 3; // Warning
     default: // info
-      return pick(env.ALERT_LEVEL_INFO, 1);
+      return 4; // Info / Low
   }
 }
 
@@ -310,7 +309,6 @@ async function resolveClientId(env: Env, alert: Alert): Promise<number> {
 
 /** Build a Gorelo PostAlertRequest for an alert (optionally overriding name/severity/description). */
 function buildAlertRequest(
-  env: Env,
   clientId: number,
   alert: Alert,
   overrides: Partial<PostAlertRequest> = {},
@@ -319,7 +317,7 @@ function buildAlertRequest(
     name: alert.title,
     clientId,
     resource: alert.host, // the host/service the alert is raised for
-    severity: alertLevel(env, alert.severity),
+    severity: alertLevel(alert.severity),
     description: buildDescription(alert),
     ...overrides,
   };
@@ -421,7 +419,7 @@ async function applyAlert(env: Env, alert: Alert, eventKey: string): Promise<Out
     // we leave the alert open so a retry re-posts.
     const clientId = await resolveClientId(env, alert);
     await client.postAlert(
-      buildAlertRequest(env, clientId, alert, {
+      buildAlertRequest(clientId, alert, {
         name: `Resolved: ${existing.title || alert.title}`,
         description: `Resolved.\n\n${buildDescription(alert)}`,
       }),
@@ -459,7 +457,7 @@ async function applyAlert(env: Env, alert: Alert, eventKey: string): Promise<Out
 
   // No open alert (new, or re-triggered after a resolve) -> post a fresh Gorelo alert.
   const clientId = await resolveClientId(env, alert);
-  await client.postAlert(buildAlertRequest(env, clientId, alert));
+  await client.postAlert(buildAlertRequest(clientId, alert));
   await putAlert(env.DB, {
     dedupe_key: alert.dedupe_key,
     monitor_id: alert.monitor_id,

@@ -161,12 +161,9 @@ ALERT_ALLOWED_IPS = ""
 # Unset => the alert's `customer` is matched by exact name against the client mirror,
 # then the `host` against a mirrored device, else CATCHALL_CLIENT_ID.
 # ALERT_CLIENT_ID = "15567"
-# Optional per-severity Gorelo AlertLevel overrides (the int Severity on the alert).
-# Unset => info->1, warning->2, critical->3. AlertLevel is an unlabeled 1–4 enum —
-# TODO(verify) which int is which level in the Gorelo UI.
-# ALERT_LEVEL_CRITICAL = "3"
-# ALERT_LEVEL_WARNING = "2"
-# ALERT_LEVEL_INFO = "1"
+# Severity->Gorelo AlertLevel is a FIXED, hardcoded mapping (Gorelo's level enum is not
+# tenant-customizable): critical->1 (Critical), warning->3 (Warning), info->4 (Info/Low).
+# See alertLevel() in src/alerts.ts. There is no env override.
 
 # Bearer-token enforcement on the Halo resource endpoints (audit F1). Only takes
 # effect when BOTH HALO_CLIENT_ID and HALO_CLIENT_SECRET secrets are set; the

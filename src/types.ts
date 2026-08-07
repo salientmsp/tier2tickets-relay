@@ -78,12 +78,8 @@ export interface Env {
   // Unset => resolve the alert's `customer` against the client mirror by exact name,
   // then the alert's `host` against a mirrored device, else CATCHALL_CLIENT_ID.
   ALERT_CLIENT_ID?: string; // int as string
-  // Optional per-severity Gorelo AlertLevel overrides (the int Severity on
-  // PostAlertRequest). Unset => info->1, warning->2, critical->3. AlertLevel is an
-  // unlabeled 1–4 enum in the spec — TODO(verify) which int is which in the Gorelo UI.
-  ALERT_LEVEL_CRITICAL?: string; // AlertLevel int (1–4) as string
-  ALERT_LEVEL_WARNING?: string; // AlertLevel int as string
-  ALERT_LEVEL_INFO?: string; // AlertLevel int as string
+  // Severity->AlertLevel is a fixed, hardcoded mapping (Gorelo's level enum is not
+  // tenant-customizable) — see alertLevel() in src/alerts.ts. No env override.
 
   // secrets (wrangler secret put ...)
   GORELO_API_KEY: string; // X-API-Key sent to Gorelo
@@ -133,8 +129,10 @@ export type PublicTicketPriority = 0 | 1 | 2 | 3 | 4;
 export type TicketSource = 1 | 2 | 3 | 4 | 5 | 6;
 
 /**
- * AlertLevel — Gorelo's alert severity enum. Ships integers [1,2,3,4] WITHOUT labels.
- * TODO(verify): confirm which int is info/warning/critical in the Gorelo UI.
+ * AlertLevel — Gorelo's alert severity enum, integers [1,2,3,4]. Confirmed against the
+ * Gorelo alerts UI: 1 = Critical (2 = Error/High, 3 = Warning, 4 = Info/Low). The enum
+ * is fixed (not tenant-customizable); the relay's severity->level mapping lives in
+ * alertLevel() (src/alerts.ts).
  */
 export type AlertLevel = 1 | 2 | 3 | 4;
 
