@@ -4,8 +4,8 @@
   "features": {
     // Node pinned to match CI (.github/workflows/ci.yml -> setup-node 26.5.1) so
     // "works locally" == "works in CI". Installed via nvm by the feature.
-    "ghcr.io/devcontainers/features/node:1": {
-      "version": "26.5.1"
+    "ghcr.io/devcontainers/features/node:2": {
+      "version": "26.7.0"
     }
   },
   // Publish the container's 8787 to the HOST on 0.0.0.0 (Docker `-p 8787:8787`), so

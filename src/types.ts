@@ -56,6 +56,11 @@ export interface Env {
   // catch-all/no-contact fallback. Any other value (or unset) suppresses it.
   SEND_TICKET_CREATED_EMAIL?: string;
   DEBUG_LOGS?: string; // "true" enables verbose HALO CAPTURE/RESPONSE body logging (PII)
+  // Master on/off for the Sentry error monitor (src/index.ts). OFF by default —
+  // Sentry sends NOTHING (no events, no spans, no egress) unless this is explicitly
+  // truthy ("true"/"1"/"yes"/"on"). Production opts in via wrangler.toml [vars];
+  // tests and `wrangler dev` leave it unset, so they never emit to the hardcoded DSN.
+  SENTRY_ENABLED?: string;
 
   // --- Monitoring alerts endpoint (POST /v1/alerts) ---------------------------
   // Each alert "source" (a customer) has its OWN shared secret bound to its OWN IP

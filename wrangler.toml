@@ -133,6 +133,13 @@ SEND_TICKET_CREATED_EMAIL = "true"
 # contain PII/PHI (names, emails, phones) — only for short debugging windows.
 DEBUG_LOGS = "false"
 
+# Master on/off for the Sentry error monitor (src/index.ts). The integration is OFF
+# unless this is truthy ("true"/"1"/"yes"/"on") — off, Sentry sends nothing (no events,
+# no spans, no egress). Set "true" here to enable it for the deployed Worker; tests and
+# `wrangler dev` leave it unset, so they never emit to Sentry. Sentry is configured to
+# ship NO PII/PHI (no bodies, headers, cookies, or user/IP) — see sentryOptions().
+SENTRY_ENABLED = "true"
+
 # --- Monitoring alerts endpoint (POST /v1/alerts) ---------------------------------
 # A generic HTTPS ingress for monitoring sources (e.g. an on-prem Windows/SQL Server)
 # to raise/update/resolve Gorelo native alerts (POST /v1/alerts/ — an alert, not a

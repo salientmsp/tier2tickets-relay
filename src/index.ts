@@ -1,3 +1,5 @@
+import * as Sentry from "@sentry/cloudflare";
+
 import { alertHealth, handleAlert } from "./alerts.js";
 import { getLastSync, getSyncMeta, initSchema, mirrorCounts, setSyncMeta } from "./db.js";
 import { GoreloClient } from "./gorelo.js";
@@ -9,6 +11,51 @@ import type { Env, SyncLocationsMessage } from "./types.js";
 // The 6-hourly mirror-refresh cron (must match wrangler.toml [triggers].crons).
 // Any other cron firing is treated as the frequent orphaned-ticket flush.
 const SYNC_CRON = "0 */6 * * *";
+
+// Sentry DSN for this relay's project. A DSN is a write-only ingest identifier, not
+// a secret (it can only submit events, never read them), so it lives in source rather
+// than a secret binding. `nodejs_compat` (wrangler.toml) already satisfies the SDK's
+// AsyncLocalStorage requirement, so no compatibility-flag change is needed.
+const SENTRY_DSN =
+  "https://e84c861f90b9a7e94e45bef4a3efae8f@o4511867765719040.ingest.us.sentry.io/4511867771355136";
+
+// Master gate for the whole Sentry integration — OFF unless `SENTRY_ENABLED` is
+// explicitly truthy (1/true/yes/on, case-insensitive; mirrors debugOn()). Production
+// opts in via wrangler.toml [vars]; tests and `wrangler dev` leave it unset.
+const sentryEnabled = (env: Env): boolean => /^(1|true|yes|on)$/i.test(env.SENTRY_ENABLED ?? "");
+
+/**
+ * Sentry options for `withSentry` (below), built per invocation from `env`.
+ *
+ * PRIVACY (mirrors the F4 no-PII logging posture in src/log.ts): this is a
+ * PHI-adjacent relay whose request/response bodies and headers carry names, emails,
+ * phone numbers and source IPs. Sentry's `dataCollection.*` categories are opt-OUT
+ * (bodies, cookies, headers all default ON), so we explicitly turn off every channel
+ * that could carry that data — leaving only the error type, stack trace and
+ * request URL/method reaching Sentry. This is the analogue of DEBUG_LOGS=false: the
+ * useful failure signal without the PII.
+ */
+function sentryOptions(env: Env): Sentry.CloudflareOptions {
+  return {
+    dsn: SENTRY_DSN,
+    // The whole integration is gated on SENTRY_ENABLED: off by default (SDK
+    // initializes but sends nothing — no events, no spans, no egress), so tests and
+    // local dev never reach the DSN. Production sets SENTRY_ENABLED="true".
+    enabled: sentryEnabled(env),
+    // Capture 100% of traces. Low-volume relay; lower this if Sentry quota is a concern.
+    tracesSampleRate: 1.0,
+    dataCollection: {
+      // Do NOT ship PII/PHI to a third party (see the note above):
+      userInfo: false, // no user.* (includes the resolved client IP)
+      httpBodies: [], // no request/response bodies (names, emails, phones)
+      cookies: false, // no cookies
+      httpHeaders: { request: false, response: false }, // no headers (auth, CF-Connecting-IP)
+    },
+    // Do not forward console/structured logs to Sentry — the same lines are the
+    // non-PII breadcrumbs of src/log.ts and belong only in Workers Logs.
+    enableLogs: false,
+  };
+}
 
 const textResponse = (status: number, body: string): Response =>
   new Response(body, { status, headers: { "content-type": "text/plain; charset=utf-8" } });
@@ -28,7 +75,10 @@ const methodNotAllowed = (allow: string): Response =>
     headers: { "content-type": "text/plain; charset=utf-8", allow },
   });
 
-export default {
+// Wrapped with `withSentry` at the bottom of this file — it instruments `fetch`,
+// `scheduled` AND `queue`, so all three entry points report unhandled errors to
+// Sentry (subject to the privacy-locked sentryOptions above).
+const handler = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
@@ -189,6 +239,15 @@ export default {
     await setSyncMeta(env.DB, "locations_synced_at", new Date().toISOString());
   },
 } satisfies ExportedHandler<Env, SyncLocationsMessage>;
+
+// Pin the generics: without them `QueueHandlerMessage` infers as `unknown` and the
+// return type widens to `ExportedHandler` (whose methods are all optional), so callers
+// — the test suite — lose the concrete, always-present `fetch`/`queue`. The 4th
+// generic (`typeof handler`) keeps the return type identical to the wrapped object.
+export default Sentry.withSentry<Env, SyncLocationsMessage, unknown, typeof handler>(
+  sentryOptions,
+  handler,
+);
 
 /**
  * Gate POST /admin/sync. Accepts the key via `X-API-Key` or `X-Admin-Key`
