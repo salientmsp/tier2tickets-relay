@@ -52,6 +52,8 @@ GORELO_BASE_URL = "https://api.usw.gorelo.io"
 # via CF-Connecting-IP) may POST tickets. "false"/"0"/"" disables the allowlist.
 ENFORCE_IP_ALLOWLIST = "true"
 
+ALERT_SOURCES    = "default, nysphi"
+ALERT_IPS_NYSPHI = "69.74.23.178, 47.21.134.136"
 # Per-product allowlist toggles. "true" enables that product's source IPs/CIDR
 # ranges (matched via CF-Connecting-IP); any other value disables. Product keys
 # and IPs live in src/products.ts (PRODUCTS). An unset flag falls back to the
