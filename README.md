@@ -223,6 +223,7 @@ Configure Tier2 as a **HaloPSA — Cloud Hosted** integration:
 | `POST /admin/sync` | `X-Admin-Key` / `X-API-Key` / `Authorization: Bearer` = `<ADMIN_KEY>` | Refresh the D1 mirror on demand (fans location fetches out to the queue) |
 | `GET /admin/status` | `ADMIN_KEY` (same as `/admin/sync`) | Pretty JSON: mirror row counts, `lastSync`, and `locationQueue` (`queued` / `drained` / `lagSeconds`) — follow the location fan-out |
 | `POST /admin/test-webhook` | `ADMIN_KEY` (same as `/admin/sync`) | Fire a test alert through the dead-letter webhook and report its HTTP status |
+| `POST /admin/debug-error` | `ADMIN_KEY` (same as `/admin/sync`) | Deliberately throw (returns `500`) to verify Sentry error reporting end-to-end — see [Error monitoring (Sentry)](#error-monitoring-sentry) |
 | `POST /v1/alerts` | **per-source** two-factor: the source's own secret (`Authorization: Bearer` / `X-Alert-Key`) **bound to** that source's own IP allowlist (see [Monitoring alerts](#monitoring-alerts)) | Monitoring-alert ingress — create/update/resolve a Gorelo alert, deduplicated by `dedupe_key` |
 | `GET`/`HEAD` `/v1/alerts/health` | none | Alert-proxy liveness descriptor (`{"status":"ok","service":"Gorelo alert proxy"}`) — no secrets |
 | `GET`/`HEAD` `/health` | none | Liveness check (accepts `HEAD` for uptime monitors) |
@@ -661,6 +662,41 @@ Gorelo's agent/client lists have no server-side filters, so they're mirrored int
   bootstrap), it fires the configured notifly webhook(s) (`NOTIFLY_URLS`, the same
   path as dead-letter alerts) so a stale mirror doesn't degrade silently. No-op
   when `NOTIFLY_URLS` is unset.
+
+## Error monitoring (Sentry)
+
+The Worker reports errors to [Sentry](https://sentry.io) (via `@sentry/cloudflare`)
+so a failing request or background job is never silent. Coverage is deliberately
+complete across **every** way a failure can surface:
+
+- **Uncaught throws** in `fetch`, `scheduled`, and `queue` — captured with a full
+  stack trace by `withSentry` (which wraps all three entry points).
+- **Handled 5xx responses** — several handlers *catch* their own error and return a
+  `5xx` (e.g. `/admin/sync` → `502`, or the Halo/alert mock's internal `500`). Those
+  never throw, so `withSentry` can't see them; a safety net in `fetch` reports **any**
+  response with status `≥ 500`. (`4xx` are client errors — auth / not-found /
+  bad-input — and are **not** reported.)
+- **Background-job failures** — a failed cron sync/flush, and a queue message that
+  **exhausts its retries** (reported once, on the final delivery, so transient
+  rate-limit retries don't spam), are captured even though they're caught internally.
+
+**Privacy.** This is a PHI-adjacent relay, so Sentry is configured to send **no
+PII/PHI** — no request/response bodies, headers, cookies, or user/IP data, and no
+forwarded logs. Only the error type, stack trace, and request method/path/status
+reach Sentry (see `sentryOptions` in `src/index.ts`). This mirrors the non-PII
+logging posture of `src/log.ts`.
+
+**Enablement.** The whole integration is gated on **`SENTRY_ENABLED`** — it sends
+nothing unless that var is truthy. The deployed Worker opts in via `wrangler.toml`
+`[vars]`; tests and `wrangler dev` leave it unset, so they never emit. The DSN is
+hardcoded in `src/index.ts` (a DSN is a write-only ingest id, not a secret).
+
+**Verify it end-to-end** against a deployment (with `SENTRY_ENABLED="true"`):
+
+```bash
+curl -X POST https://<your-worker-host>/admin/debug-error -H "X-Admin-Key: <ADMIN_KEY>"
+# returns 500; a "Sentry verification error" event appears in the Sentry project
+```
 
 ## Security
 
