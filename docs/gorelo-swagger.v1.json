@@ -134,6 +134,7 @@
             "name": "cursor",
             "in": "query",
             "description": "Opaque pagination cursor from a previous page; omit for the first page.",
+            "style": "form",
             "schema": {
               "type": "string"
             }
@@ -142,6 +143,7 @@
             "name": "pageSize",
             "in": "query",
             "description": "Number of items per page. Clamped to 1–200 (default 50).",
+            "style": "form",
             "schema": {
               "type": "integer",
               "format": "int32",
@@ -246,6 +248,7 @@
             "in": "path",
             "description": "Device identifier.",
             "required": true,
+            "style": "simple",
             "schema": {
               "type": "string",
               "format": "uuid"
@@ -368,6 +371,7 @@
             "name": "cursor",
             "in": "query",
             "description": "Opaque pagination cursor from a previous page; omit for the first page.",
+            "style": "form",
             "schema": {
               "type": "string"
             }
@@ -376,6 +380,7 @@
             "name": "pageSize",
             "in": "query",
             "description": "Number of items per page. Clamped to 1–200 (default 50).",
+            "style": "form",
             "schema": {
               "type": "integer",
               "format": "int32",
@@ -728,6 +733,7 @@
             "in": "path",
             "description": "Client identifier.",
             "required": true,
+            "style": "simple",
             "schema": {
               "type": "integer",
               "format": "int64"
@@ -851,6 +857,7 @@
             "in": "path",
             "description": "Client identifier.",
             "required": true,
+            "style": "simple",
             "schema": {
               "type": "integer",
               "format": "int64"
@@ -973,6 +980,7 @@
             "name": "clientId",
             "in": "query",
             "description": "Optional client identifier to filter contacts by.",
+            "style": "form",
             "schema": {
               "type": "integer",
               "format": "int64"
@@ -982,6 +990,7 @@
             "name": "cursor",
             "in": "query",
             "description": "Opaque pagination cursor from a previous page; omit for the first page.",
+            "style": "form",
             "schema": {
               "type": "string"
             }
@@ -990,6 +999,7 @@
             "name": "pageSize",
             "in": "query",
             "description": "Number of items per page. Clamped to 1–200 (default 50).",
+            "style": "form",
             "schema": {
               "type": "integer",
               "format": "int32",
@@ -1342,6 +1352,7 @@
             "in": "path",
             "description": "Contact identifier.",
             "required": true,
+            "style": "simple",
             "schema": {
               "type": "integer",
               "format": "int64"
@@ -1464,6 +1475,7 @@
             "name": "cursor",
             "in": "query",
             "description": "Opaque pagination cursor from a previous page; omit for the first page.",
+            "style": "form",
             "schema": {
               "type": "string"
             }
@@ -1472,6 +1484,7 @@
             "name": "pageSize",
             "in": "query",
             "description": "Number of items per page. Clamped to 1–200 (default 50).",
+            "style": "form",
             "schema": {
               "type": "integer",
               "format": "int32",
@@ -1760,6 +1773,7 @@
             "name": "cursor",
             "in": "query",
             "description": "Opaque pagination cursor from a previous page; omit for the first page.",
+            "style": "form",
             "schema": {
               "type": "string"
             }
@@ -1768,6 +1782,7 @@
             "name": "pageSize",
             "in": "query",
             "description": "Number of items per page. Clamped to 1–200 (default 50).",
+            "style": "form",
             "schema": {
               "type": "integer",
               "format": "int32",
@@ -1778,6 +1793,7 @@
             "name": "sortBy",
             "in": "query",
             "description": "Sort column: `updatedOn` (default) or `createdOn`.",
+            "style": "form",
             "schema": {
               "type": "string",
               "default": "updatedOn"
@@ -1787,6 +1803,7 @@
             "name": "sortOrder",
             "in": "query",
             "description": "Sort direction: `asc` or `desc` (default).",
+            "style": "form",
             "schema": {
               "type": "string",
               "default": "desc"
