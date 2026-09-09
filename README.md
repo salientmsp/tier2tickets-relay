@@ -189,6 +189,16 @@ merge the two: the dev file stands alone, so it repeats every binding and carrie
 `[vars]`. `npm run check:configs` (also a CI step) fails if `wrangler.toml` gains a var
 this config doesn't answer for, so they can't silently drift.
 
+Onboarding data is exempt, by pattern rather than by name: `ALERT_SOURCES`, the
+per-customer `ALERT_IPS_<KEY>`, and the per-product `HALO_CLIENT_ID_<PRODUCT>`. Adding an
+alert source or a product is meant to need no code change, so it should not force an edit
+in two more configs either, and real customer IP ranges do not belong in a config
+developers run locally. Each is safe only because the code degrades correctly without it
+(an unset `ALERT_SOURCES` leaves just the built-in `default` source, and `ALERT_IPS_<KEY>`
+is read only for keys that `ALERT_SOURCES` lists). The default source's own
+`ALERT_ALLOWED_IPS` is **not** exempt. Exempted keys are printed on every run rather than
+hidden, so an exemption that stops being correct is visible.
+
 The dev config differs from production where production is wrong-to-hostile locally:
 
 | Var | prod | dev | why |

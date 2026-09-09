@@ -54,17 +54,41 @@ function readTable(file, table) {
 }
 
 const problems = [];
+const exempt = new Set();
 const prodVars = readTable("wrangler.toml", "vars");
 
-// Production [vars] keys intentionally not carried into a target, and why.
-const OMITS = {
-  dev: new Map([
-    // The per-product Halo client_id is commented out in production too; locally the
-    // whole pair (id + secret) lives in .dev.vars so the two halves stay together.
-    ["HALO_CLIENT_ID_HUNTRESS", "set in .dev.vars alongside its secret"],
-  ]),
-  staging: new Map(),
-};
+// Production [vars] that a non-production target is NOT expected to mirror, matched by
+// PATTERN rather than by name.
+//
+// These are onboarding data, not application config. The relay is deliberately built so
+// that adding an alert source or a product needs no code change — you append the key and
+// set its vars — and a guard that then demanded the same edit in two more configs would
+// defeat exactly that. Worse, the values are real customer network ranges, which have no
+// business sitting in a config developers run locally.
+//
+// Each pattern is safe only because the code already degrades correctly when the var is
+// absent; the reason is recorded so that stays checkable.
+const OMIT_PATTERNS = [
+  {
+    re: /^ALERT_SOURCES$|^ALERT_IPS_/,
+    why:
+      "per-customer alert sources. With ALERT_SOURCES unset, alertSources() (src/alerts.ts) " +
+      "yields just the built-in `default`, and ALERT_IPS_<KEY> is only read for keys listed " +
+      "in ALERT_SOURCES — so it is never read here. Note this does NOT match " +
+      "ALERT_ALLOWED_IPS, the default source's own list, which stays required.",
+  },
+  {
+    re: /^HALO_CLIENT_ID_/,
+    why:
+      "per-product Halo client_ids. The gate needs both the id AND its secret to resolve, so " +
+      "declaring the id alone changes nothing; that product simply stays lenient. Add one to " +
+      "a target only when you want to token-enforce that product there.",
+  },
+];
+
+function omitted(key) {
+  return OMIT_PATTERNS.find((p) => p.re.test(key));
+}
 
 // Settings that define each target's safe posture. A config that disagrees is a bug.
 //
@@ -103,10 +127,16 @@ for (const { label, where, vars } of TARGETS) {
     continue;
   }
   for (const key of prodVars.keys()) {
-    if (vars.has(key) || OMITS[label].has(key)) continue;
+    if (vars.has(key)) continue;
+    if (omitted(key)) {
+      exempt.add(key);
+      continue;
+    }
     problems.push(
       `${where} is missing "${key}" (present in wrangler.toml [vars]). Wrangler does not ` +
-        "inherit vars, so it would read as undefined. Add it, or record it in OMITS with a reason.",
+        "inherit vars, so it would read as undefined. Add it there, or — if it is onboarding " +
+        "data every target should not have to mirror — add a pattern to OMIT_PATTERNS with " +
+        "the reason it is safe to omit.",
     );
   }
   for (const [key, expected] of REQUIRED[label]) {
@@ -173,6 +203,11 @@ if (problems.length) {
   process.exit(1);
 }
 
+const required = prodVars.size - exempt.size;
 console.log(
-  `Wrangler configs OK — dev and staging both cover ${prodVars.size} production vars.`,
+  `Wrangler configs OK — dev and staging both cover ${required} of ${prodVars.size} production vars.`,
 );
+if (exempt.size) {
+  // Named, not silent: an exemption that stops being correct should be noticeable.
+  console.log(`Exempt as onboarding data (see OMIT_PATTERNS): ${[...exempt].sort().join(", ")}`);
+}
