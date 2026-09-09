@@ -202,6 +202,41 @@ script.
 - **Schedule** it **outside the import window** (e.g. daily 03:00 local, after the restore
   and its retries).
 
+## Integrity & verification
+
+Corruption is caught at several layers; know which flag/step covers what.
+
+**Download (AzCopy, vendor blob → `Incoming\`).**
+- **In transit:** AzCopy v10 sends a per-block MD5 with every block, so the service rejects
+  any block corrupted on the wire — automatic, no flags needed.
+- **End-to-end (blob == source file):** relies on the blob carrying a `Content-MD5`, which
+  the **uploader** must opt into. In AzCopy **v10 that's opt-in** (`--put-md5`); it was the
+  default in v8. Since the **vendor** uploads here, you don't control it — confirm whether
+  their blobs have `Content-MD5`.
+  - `--check-md5` is on by default in mode **`FailIfDifferent`**: it verifies *if* a hash is
+    present and **silently passes if it's missing**.
+  - `--check-md5 FailIfDifferentOrMissing` makes a *missing* hash an error too — but only use
+    it if the vendor sets `--put-md5`, otherwise **every download fails**. If they don't set
+    it, leave the default.
+- **Regardless of MD5**, corruption is caught downstream: **7-Zip extraction** fails on a bad
+  archive (CRC → non-zero exit → the script throws), and **`RESTORE`** rejects a bad backup
+  (page/backup checksums). Ask the vendor to enable `--put-md5` if you want the earliest,
+  explicit check.
+
+**Local backups.** System-DB (and any self-owned `db_nysphi`) backups are written
+`WITH CHECKSUM` and immediately `RESTORE VERIFYONLY`'d, so they're validated at creation.
+
+**Off-host push (→ S3 / Wasabi).** Validate there too — it's your DR copy:
+- The AWS CLI checks each part's integrity on upload (per-part MD5); optionally add
+  `--checksum-algorithm SHA256` for an end-to-end client checksum where the endpoint
+  supports S3 additional checksums.
+- The real proof is a **periodic test-restore / `RESTORE VERIFYONLY` of a backup pulled back
+  from the bucket** — the backups carry `WITH CHECKSUM` and the `.7z` carry CRCs, so that
+  validates the off-site copy end-to-end.
+- Note: MD5/CRC are **corruption** checks, not **tamper**-evidence — pair them with Object
+  Lock + least-privilege keys for that. And `--put-md5` hashes the whole source, which costs
+  time on very large files.
+
 ## Security
 
 - The relay secret and any customer identifiers live only in the NTFS-protected config

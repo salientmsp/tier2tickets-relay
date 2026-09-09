@@ -80470,66 +80470,82 @@
             "nullable": true
           },
           "partnerid": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "partnername": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "customerid": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "customername": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "customerdomainname": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "customercountry": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "mpnid": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "invoicenumber": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "skuid": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "availabilityid": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "skuname": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "productname": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "publisherid": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "publishername": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "subscriptiondescription": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "subscriptionid": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
@@ -80549,54 +80565,67 @@
             "nullable": true
           },
           "metertype": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "metercategory": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "meterid": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "metersubcategory": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "metername": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "meterregion": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "unit": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "resourcelocation": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "consumedservice": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "resourcegroup": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "resourceuri": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "orderid": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "orderdate": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
@@ -80611,6 +80640,7 @@
             "nullable": true
           },
           "unittype": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
@@ -80635,6 +80665,7 @@
             "nullable": true
           },
           "billingcurrency": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
@@ -80644,22 +80675,27 @@
             "nullable": true
           },
           "pricingcurrency": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "serviceinfo1": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "serviceinfo2": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "tags": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "additionalinfo": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
@@ -80674,14 +80710,17 @@
             "nullable": true
           },
           "pctobcexchangeratedate": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "entitlementid": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "entitlementdescription": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
@@ -80691,38 +80730,47 @@
             "nullable": true
           },
           "creditpercentage": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "credittype": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "benefitorderid": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "benefitid": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "benefittype": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "currency": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "priceadjustmentdescription": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "termandbillingcycle": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "alternateid": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
@@ -80732,18 +80780,22 @@
             "nullable": true
           },
           "billingfrequency": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "meterdescription": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "reservationorderid": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "creditreasoncode": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
@@ -80758,10 +80810,12 @@
             "nullable": true
           },
           "referenceid": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
           "promotionid": {
+            "maxLength": 500,
             "type": "string",
             "nullable": true
           },
@@ -82475,6 +82529,10 @@
           "flow_step": {
             "type": "integer",
             "format": "int32"
+          },
+          "is_reprocess": {
+            "type": "boolean",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -101045,6 +101103,10 @@
             "type": "boolean",
             "nullable": true
           },
+          "servicenow_use_incident_severity": {
+            "type": "boolean",
+            "nullable": true
+          },
           "dont_update_so_cost_from_po_price": {
             "type": "boolean",
             "nullable": true
@@ -101052,6 +101114,10 @@
           "mailbox_batch_size": {
             "type": "integer",
             "format": "int32",
+            "nullable": true
+          },
+          "tidy_html_value": {
+            "type": "boolean",
             "nullable": true
           },
           "hosted_group": {
@@ -123924,6 +123990,11 @@
             "type": "boolean",
             "nullable": true
           },
+          "guid": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
           "typeinfo_id": {
             "type": "integer",
             "format": "int32",
@@ -131542,6 +131613,10 @@
             "nullable": true
           },
           "lock_tax": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "_resequence_lines": {
             "type": "boolean",
             "nullable": true
           },
@@ -147018,6 +147093,10 @@
             "format": "int32",
             "nullable": true
           },
+          "qbo_company_id": {
+            "type": "string",
+            "nullable": true
+          },
           "_dotaxsync": {
             "type": "boolean",
             "nullable": true
@@ -151688,6 +151767,10 @@
             "type": "integer",
             "format": "int32",
             "nullable": true
+          },
+          "showforusers": {
+            "type": "boolean",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -153687,22 +153770,6 @@
             "type": "string",
             "nullable": true
           },
-          "_match_additional_id": {
-            "type": "string",
-            "nullable": true
-          },
-          "_match_integration_button_caption": {
-            "type": "string",
-            "nullable": true
-          },
-          "_match_integration_button_url": {
-            "type": "string",
-            "nullable": true
-          },
-          "_match_integration_button_icon": {
-            "type": "string",
-            "nullable": true
-          },
           "third_party_number": {
             "type": "string",
             "nullable": true
@@ -154194,6 +154261,22 @@
             "nullable": true
           },
           "_match_integration_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "_match_additional_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "_match_integration_button_caption": {
+            "type": "string",
+            "nullable": true
+          },
+          "_match_integration_button_url": {
+            "type": "string",
+            "nullable": true
+          },
+          "_match_integration_button_icon": {
             "type": "string",
             "nullable": true
           }
@@ -170774,6 +170857,10 @@
             "format": "double",
             "nullable": true
           },
+          "use_purchase_rate": {
+            "type": "boolean",
+            "nullable": true
+          },
           "duedate": {
             "type": "string",
             "format": "date-time",
@@ -182458,6 +182545,10 @@
             "format": "int32",
             "nullable": true
           },
+          "qbo_company_id": {
+            "type": "string",
+            "nullable": true
+          },
           "_importtypeid": {
             "type": "integer",
             "format": "int32",
@@ -182951,6 +183042,10 @@
           "question5": {
             "type": "integer",
             "format": "int32",
+            "nullable": true
+          },
+          "qbo_company_id": {
+            "type": "string",
             "nullable": true
           },
           "_importtypeid": {
