@@ -36,6 +36,14 @@ jobs:
       - name: Verify allowScripts allowlist
         run: npm run check:allowscripts
 
+      # Keep the non-production Wrangler targets (wrangler.dev.toml and [env.staging])
+      # answering for every production var and holding their safe posture. Wrangler does
+      # not inherit vars/d1/queues into an environment and shares nothing across config
+      # files, so a var added to wrangler.toml reads as undefined in both until it is
+      # added there too. See scripts/check-wrangler-configs.mjs.
+      - name: Verify dev and staging Wrangler configs
+        run: npm run check:configs
+
       - name: Typecheck
         run: npm run typecheck
 

@@ -218,3 +218,122 @@ binding = "DB"
 database_name = "tier2tickets-relay"
 database_id = "fe2efa6c-f7d4-439b-adfd-3dc10ee0caa5"
 migrations_dir = "migrations"
+
+# =====================================================================================
+# STAGING ENVIRONMENT — a separate Cloudflare tenant.
+# Deploy with:  npm run deploy:staging   (wrangler deploy --env staging)
+#
+# Everything above this line is PRODUCTION and is what a bare `wrangler deploy` uses.
+# Wrangler does NOT inherit `vars`, `d1_databases` or `queues` into an environment — it
+# warns and the binding is simply ABSENT — so every one of them is repeated below.
+# (`account_id` and `triggers` ARE inherited, so both are restated explicitly here to
+# keep staging from silently following production.)
+# `npm run check:configs` fails if this env stops covering a production var, or if any
+# of its identifiers point back at the production tenant.
+#
+# FIRST-TIME SETUP (once, against the STAGING tenant):
+#   1. Fill account_id below with the staging Cloudflare account id.
+#   2. wrangler d1 create tier2tickets-relay-staging --env staging
+#        -> paste the returned id into database_id below
+#   3. wrangler queues create tier2tickets-sync-staging --env staging
+#   4. wrangler d1 migrations apply tier2tickets-relay-staging --env staging --remote
+#   5. Fill the TODO(staging) ids below from the STAGING Gorelo tenant:
+#        GORELO_API_KEY=<staging key> ./scripts/gorelo-ids.sh
+#   6. Push the staging secrets (each needs --env staging; they are per-environment
+#      and do NOT carry over from production):
+#        wrangler secret put GORELO_API_KEY --env staging   # the STAGING tenant's key
+#        wrangler secret put ADMIN_KEY --env staging
+#        wrangler secret put ALERT_SHARED_SECRET --env staging
+#        wrangler secret put HALO_CLIENT_SECRET --env staging
+#      (./scripts/halo-cred.sh <product> --env staging already passes --env through.)
+# =====================================================================================
+[env.staging]
+name = "tier2tickets-relay-staging"
+# TODO(staging): the STAGING Cloudflare account id. Deploys fail loudly until it is set,
+# which is deliberate — without it, `--env staging` would publish into whichever tenant
+# you are currently logged into, i.e. production.
+account_id = "TODO_STAGING_CLOUDFLARE_ACCOUNT_ID"
+
+[env.staging.observability.logs]
+enabled = true
+invocation_logs = true
+head_sampling_rate = 1.0
+
+# Inherited from production if omitted, so stated explicitly.
+[env.staging.triggers]
+crons = ["0 */6 * * *", "*/5 * * * *"]
+
+# Distinct queue name. Different tenants have separate queue namespaces, so this is
+# defense in depth: if account_id were ever wrong, a shared name would let staging
+# consume production's messages.
+[[env.staging.queues.producers]]
+binding = "SYNC_QUEUE"
+queue = "tier2tickets-sync-staging"
+
+[[env.staging.queues.consumers]]
+queue = "tier2tickets-sync-staging"
+max_batch_size = 10
+max_batch_timeout = 10
+max_retries = 3
+
+[env.staging.vars]
+# Gorelo's base URL is REGIONAL, not per-tenant — the tenant is selected by the
+# GORELO_API_KEY secret. So staging keeps the same regional URL and points at the
+# staging tenant purely via its own key (step 6 above). Change this only if the staging
+# tenant lives in another region (AU: https://api.aue.gorelo.io).
+GORELO_BASE_URL = "https://api.usw.gorelo.io"
+
+# ON, mirroring production. Staging is a public, internet-reachable Worker whose
+# endpoints file tickets, so it keeps production's doorman. Add a test source's egress
+# IP to the product ranges (src/products.ts) or to ALERT_ALLOWED_IPS below to exercise it.
+ENFORCE_IP_ALLOWLIST = "true"
+
+ENABLE_TIER2 = "true"
+ENABLE_HUNTRESS = "true"
+
+# --- Gorelo IDs: TENANT-SPECIFIC, must be re-derived against the STAGING tenant -------
+# Run `GORELO_API_KEY=<staging key> ./scripts/gorelo-ids.sh` and paste the results.
+# "0" is a deliberate placeholder: staging is not functional until these are filled.
+DEFAULT_GROUP_ID = "0"       # TODO(staging): group id from the staging tenant
+DEFAULT_TYPE_ID = "0"        # TODO(staging): ticket type id ("Incident" in prod)
+CATCHALL_CLIENT_ID = "0"     # TODO(staging): fallback client id
+HDB_TAG_ID = "0"             # TODO(staging): "Submitted VIA HDB" tag id
+HUNTRESS_TAG_ID = "0"        # TODO(staging): "Submitted via Huntress" tag id
+FALLBACK_TAG_ID = "0"        # TODO(staging): "Submitted via API" tag id
+
+# Fixed Gorelo enums / universal ids — NOT tenant-specific, so these carry over as-is.
+# PublicTicketPriority = [0..4]; TicketSource = [1..6] (6 = API/integration); status 1 = New.
+DEFAULT_STATUS_ID = "1"
+DEFAULT_PRIORITY = "2"
+DEFAULT_SOURCE = "6"
+EMERGENCY_PRIORITY = "1"
+
+# OFF for staging, and the single most important guard here. A staging Gorelo tenant is
+# usually seeded from production, so its contacts carry REAL email addresses — leaving
+# this on would have staging email real people about test tickets.
+SEND_TICKET_CREATED_EMAIL = "false"
+
+# OFF for staging. These logs persist in Cloudflare Workers Logs, and full capture
+# bodies are PII/PHI. Flip to "true" only for a short, deliberate debugging window.
+DEBUG_LOGS = "false"
+
+# OFF for staging. The Sentry DSN is hardcoded, so enabling it here would mix staging
+# noise into the same project that carries real production errors. Enabling staging
+# reporting properly means giving it its own DSN first.
+SENTRY_ENABLED = "false"
+
+# ON, mirroring production — validating the real token posture is the point of staging.
+# Its credential pair is a STAGING secret: ./scripts/halo-cred.sh tier2 --env staging
+HALO_TOKEN_ENFORCE = "enforce"
+
+# Alert-source IPs for the staging monitoring ingress. Enforced (allowlist is on above),
+# so an empty list rejects the `default` source until a test host's egress IP is added.
+ALERT_ALLOWED_IPS = ""
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "tier2tickets-relay-staging"
+# TODO(staging): paste the id from `wrangler d1 create tier2tickets-relay-staging --env staging`.
+# The nil UUID until then, so a deploy fails rather than binding anything real.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"

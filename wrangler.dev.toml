@@ -1,0 +1,114 @@
+# Local-development Wrangler config. Use it with `npm run dev` / `npm run dev:lan`,
+# which pass `-c wrangler.dev.toml`. `wrangler.toml` stays the PRODUCTION config and
+# is what `npm run deploy` uses — nothing here reaches the deployed Worker.
+#
+# Why a second file: wrangler.toml [vars] carries the live Salient tenant's settings
+# (IP allowlist on, Sentry on, token enforcement on, "ticket created" emails on). Those
+# are wrong-to-hostile for local work, and editing wrangler.toml to dev against it risks
+# committing a prod change. This file keeps the dev posture explicit and reviewable.
+#
+# Wrangler does NOT merge configs — this file stands alone, so every binding the Worker
+# needs is repeated here. `npm run check:devconfig` fails if wrangler.toml grows a [vars]
+# key this file doesn't answer for, so the two can't silently drift apart.
+
+# Deliberately NOT "tier2tickets-relay": if this config is ever handed to `wrangler
+# deploy`, it publishes a separate dev Worker instead of overwriting production.
+name = "tier2tickets-relay-dev"
+main = "src/index.ts"
+compatibility_date = "2024-11-27"
+compatibility_flags = ["nodejs_compat"]
+
+# Local runs print to your terminal; the dashboard logging config is irrelevant here.
+# Kept only so this file mirrors the shape of wrangler.toml.
+[observability.logs]
+enabled = true
+invocation_logs = true
+head_sampling_rate = 1.0
+
+# `wrangler dev` never fires crons on a schedule — trigger one by hand with e.g.
+#   curl "http://localhost:8787/__scheduled?cron=0+*/6+*+*+*"
+# Kept so both cron strings stay exercisable locally.
+[triggers]
+crons = ["0 */6 * * *", "*/5 * * * *"]
+
+# src/sync.ts fans location fetches out to this queue; the binding must exist or the
+# Worker throws at runtime. `wrangler dev` serves it from a local in-memory queue, so
+# no `wrangler queues create` is needed for local work.
+[[queues.producers]]
+binding = "SYNC_QUEUE"
+queue = "tier2tickets-sync"
+
+[[queues.consumers]]
+queue = "tier2tickets-sync"
+max_batch_size = 10
+max_batch_timeout = 10
+max_retries = 3
+
+[vars]
+# Gorelo is a REAL outbound dependency even in local dev — there is no Gorelo sandbox.
+# Whatever tenant GORELO_API_KEY (in .dev.vars) belongs to is the tenant you will write
+# to. The guards below limit the blast radius; they do not eliminate it.
+GORELO_BASE_URL = "https://api.usw.gorelo.io"
+
+# OFF for dev. `wrangler dev` has no CF-Connecting-IP header, so an enabled allowlist
+# rejects every local request (and every LAN request from a test host). The shared
+# secret / bearer token still gate the endpoints — see README "Local development".
+ENFORCE_IP_ALLOWLIST = "false"
+
+ENABLE_TIER2 = "true"
+ENABLE_HUNTRESS = "true"
+
+# --- Gorelo IDs -------------------------------------------------------------------
+# Tenant metadata (groups/types/statuses/tags) that scripts/seed-dev.sql does not model,
+# so these match wrangler.toml — a locally-created ticket lands in the same queue it
+# would in prod. CATCHALL_CLIENT_ID is the one the seed depends on: seed-dev.sql inserts
+# client 15567 "Catch-All (dev)" so offline routing resolves. Change one, change both.
+DEFAULT_GROUP_ID = "2051"
+DEFAULT_TYPE_ID = "7045"
+DEFAULT_STATUS_ID = "1"
+DEFAULT_PRIORITY = "2"
+DEFAULT_SOURCE = "6"
+CATCHALL_CLIENT_ID = "15567"
+HDB_TAG_ID = "31974"
+HUNTRESS_TAG_ID = "32870"
+FALLBACK_TAG_ID = "32885"
+EMERGENCY_PRIORITY = "1"
+
+# OFF for dev — this is the setting that emails a real human. Prod sends Gorelo's
+# "ticket created" mail whenever a press resolves a real contact; a local test press
+# against a real contact would do the same. Never flip this on locally.
+SEND_TICKET_CREATED_EMAIL = "false"
+
+# ON for dev: logs full HALO CAPTURE/RESPONSE bodies, which is the point of running
+# locally. Those bodies contain PII/PHI, so keep the output in your terminal — do not
+# paste it into an issue, a PR, or a chat log.
+DEBUG_LOGS = "true"
+
+# OFF for dev. Prod opts in via wrangler.toml; leaving it off here keeps local runs from
+# emitting to the shared Sentry project, where dev noise is indistinguishable from real
+# production errors. Set SENTRY_ENABLED="true" in .dev.vars for a one-off Sentry test.
+SENTRY_ENABLED = "false"
+
+# OFF for dev so you can curl the Halo resource endpoints without minting a bearer
+# token first. The token specs cover all three modes regardless; to exercise the gate
+# by hand, set HALO_TOKEN_ENFORCE="observe" (or "enforce") in .dev.vars.
+HALO_TOKEN_ENFORCE = "off"
+
+# Empty and unenforced (ENFORCE_IP_ALLOWLIST=false above), so the POST /v1/alerts
+# `default` source is gated by ALERT_SHARED_SECRET from .dev.vars alone.
+ALERT_ALLOWED_IPS = ""
+
+# --- Secrets ----------------------------------------------------------------------
+# Local secrets come from .dev.vars (git-ignored) — `cp .dev.vars.example .dev.vars`.
+# Never `wrangler secret put` against this config; it targets the dev Worker name.
+
+# --- D1 ---------------------------------------------------------------------------
+# `wrangler dev` uses a local SQLite file under .wrangler/state keyed by the BINDING,
+# so database_id is unused locally. It is deliberately the nil UUID rather than the real
+# one: `--remote` against this config fails loudly instead of quietly reading and
+# writing the production database.
+[[d1_databases]]
+binding = "DB"
+database_name = "tier2tickets-relay"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"

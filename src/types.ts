@@ -224,6 +224,17 @@ export interface PublicDeviceResponse {
   name?: string | null;
   displayName?: string | null;
   clientId?: number | null;
+  /**
+   * Site id. Gorelo RENAMED this from `clientLocationId` to `locationId` (see the
+   * PublicDeviceResponse schema in docs/gorelo-swagger.v1.json). Both are declared so a
+   * response in either shape still resolves — the fields are optional, so reading only
+   * the old name yielded `undefined` with no type error and silently nulled the site on
+   * every mirrored device. Read them together via `deviceLocationId()` in sync.ts.
+   * `clientLocationId` is retained only for the transition and can go once every region
+   * is confirmed on the new shape.
+   */
+  locationId?: number | null;
+  /** @deprecated Gorelo's pre-rename name for `locationId`. */
   clientLocationId?: number | null;
   serialNo?: string | null;
   uuid?: string | null;
@@ -264,6 +275,9 @@ export interface PublicContactResponse {
   firstName?: string | null;
   lastName?: string | null;
   clientId?: number | null;
+  /** Site id. Renamed from `clientLocationId` by Gorelo — see PublicDeviceResponse. */
+  locationId?: number | null;
+  /** @deprecated Gorelo's pre-rename name for `locationId`. */
   clientLocationId?: number | null;
 }
 

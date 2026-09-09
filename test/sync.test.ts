@@ -82,13 +82,13 @@ function baseData(): GoreloData {
     clients: [{ id: 10, name: "Corp" }],
     locations: { 10: [{ id: 100, name: "HQ" }] },
     contacts: {
-      10: [{ id: 55, primaryEmail: "user@corp.com", firstName: "Jane", lastName: "Doe", clientId: 10, clientLocationId: 100 }],
+      10: [{ id: 55, primaryEmail: "user@corp.com", firstName: "Jane", lastName: "Doe", clientId: 10, locationId: 100 }],
     },
     agents: [
       {
         id: "3fa85f64-5717-4562-b3fc-2c963f66afa6",
         clientId: 10,
-        clientLocationId: 100,
+        locationId: 100,
         displayName: "PC-01",
         serialNo: "SN1",
         localIPAddress: "10.0.0.5",
@@ -181,6 +181,58 @@ describe("syncAll delta reconcile (inline tables + location fan-out)", () => {
     expect(dev?.asset_num).toBe(assetNum(String(data.agents[0]!.id)));
   });
 
+  // Regression: Gorelo renamed the site field on devices and contacts from
+  // `clientLocationId` to `locationId`. Both are optional on the response types, so the
+  // sync kept reading the old name with no type error, wrote NULL for every device and
+  // contact, and nulled the site on every ticket the relay filed. Nothing failed — the
+  // old suite mocked the pre-rename shape, so it agreed with the bug. These assert the
+  // mirrored site id directly, in both response shapes.
+  it("mirrors the site id from `locationId` (the current Gorelo shape)", async () => {
+    await syncAll(makeQueue().env);
+
+    const dev = await env.DB
+      .prepare(`SELECT location_id FROM devices WHERE agent_id = ?`)
+      .bind(data.agents[0]!.id)
+      .first<{ location_id: number | null }>();
+    expect(dev?.location_id).toBe(100);
+
+    const ct = await env.DB
+      .prepare(`SELECT location_id FROM contacts WHERE id = 55`)
+      .first<{ location_id: number | null }>();
+    expect(ct?.location_id).toBe(100);
+  });
+
+  it("still mirrors the site id from the legacy `clientLocationId` shape", async () => {
+    // A region that has not rolled the rename out yet, or a rollback.
+    data.agents[0] = { id: data.agents[0]!.id, clientId: 10, clientLocationId: 100, displayName: "PC-01" };
+    data.contacts[10] = [
+      { id: 55, primaryEmail: "user@corp.com", firstName: "Jane", lastName: "Doe", clientId: 10, clientLocationId: 100 },
+    ];
+    await syncAll(makeQueue().env);
+
+    const dev = await env.DB
+      .prepare(`SELECT location_id FROM devices WHERE agent_id = ?`)
+      .bind(data.agents[0]!.id)
+      .first<{ location_id: number | null }>();
+    expect(dev?.location_id).toBe(100);
+
+    const ct = await env.DB
+      .prepare(`SELECT location_id FROM contacts WHERE id = 55`)
+      .first<{ location_id: number | null }>();
+    expect(ct?.location_id).toBe(100);
+  });
+
+  it("leaves the site id NULL when Gorelo sends neither field", async () => {
+    data.agents[0] = { id: data.agents[0]!.id, clientId: 10, displayName: "PC-01" };
+    await syncAll(makeQueue().env);
+
+    const dev = await env.DB
+      .prepare(`SELECT location_id FROM devices WHERE agent_id = ?`)
+      .bind(data.agents[0]!.id)
+      .first<{ location_id: number | null }>();
+    expect(dev?.location_id).toBeNull();
+  });
+
   it("reports zero changes when nothing changed upstream (no wasted writes)", async () => {
     await syncAll(makeQueue().env);
     const r = await syncAll(makeQueue().env); // identical dataset, second run
@@ -207,8 +259,8 @@ describe("syncAll delta reconcile (inline tables + location fan-out)", () => {
 
     data.clients.push({ id: 20, name: "NewCo" });
     data.agents = [
-      { id: "aaaaaaaa-0000-0000-0000-000000000001", clientId: 10, clientLocationId: 100, displayName: "PC-NEW" },
-      { id: "bbbbbbbb-0000-0000-0000-000000000002", clientId: 20, clientLocationId: 200, displayName: "PC-BRANCH" },
+      { id: "aaaaaaaa-0000-0000-0000-000000000001", clientId: 10, locationId: 100, displayName: "PC-NEW" },
+      { id: "bbbbbbbb-0000-0000-0000-000000000002", clientId: 20, locationId: 200, displayName: "PC-BRANCH" },
     ];
 
     const q = makeQueue();
@@ -250,13 +302,13 @@ describe("syncAll delta reconcile (inline tables + location fan-out)", () => {
     const contactsByCursor: Record<string, Response> = {
       "": listEnv(
         [
-          { id: 1, primaryEmail: "a@corp.com", firstName: "A", lastName: "A", clientId: 10, clientLocationId: 100 },
-          { id: 2, primaryEmail: "b@corp.com", firstName: "B", lastName: "B", clientId: 10, clientLocationId: 100 },
+          { id: 1, primaryEmail: "a@corp.com", firstName: "A", lastName: "A", clientId: 10, locationId: 100 },
+          { id: 2, primaryEmail: "b@corp.com", firstName: "B", lastName: "B", clientId: 10, locationId: 100 },
         ],
         { NextCursor: "page2", HasMore: true },
       ),
       page2: listEnv(
-        [{ id: 3, primaryEmail: "c@corp.com", firstName: "C", lastName: "C", clientId: 10, clientLocationId: 100 }],
+        [{ id: 3, primaryEmail: "c@corp.com", firstName: "C", lastName: "C", clientId: 10, locationId: 100 }],
         { NextCursor: null, HasMore: false },
       ),
     };
@@ -293,7 +345,7 @@ describe("syncAll delta reconcile (inline tables + location fan-out)", () => {
   it("does NOT delete contacts when the bulk contacts fetch fails (partial sync)", async () => {
     data.clients.push({ id: 20, name: "NewCo" });
     data.contacts[20] = [
-      { id: 77, primaryEmail: "bob@newco.com", firstName: "Bob", lastName: "Roe", clientId: 20, clientLocationId: 200 },
+      { id: 77, primaryEmail: "bob@newco.com", firstName: "Bob", lastName: "Roe", clientId: 20, locationId: 200 },
     ];
     await syncAll(makeQueue().env);
     expect(await count("contacts")).toBe(2);
@@ -307,8 +359,8 @@ describe("syncAll delta reconcile (inline tables + location fan-out)", () => {
 
   it("collapses a duplicate contact id in the bulk feed to one stable row", async () => {
     data.contacts[10] = [
-      { id: 55, primaryEmail: "a@corp.com", firstName: "Jane", lastName: "A", clientId: 10, clientLocationId: 100 },
-      { id: 55, primaryEmail: "b@corp.com", firstName: "Jane", lastName: "B", clientId: 20, clientLocationId: 200 },
+      { id: 55, primaryEmail: "a@corp.com", firstName: "Jane", lastName: "A", clientId: 10, locationId: 100 },
+      { id: 55, primaryEmail: "b@corp.com", firstName: "Jane", lastName: "B", clientId: 20, locationId: 200 },
     ];
     await syncAll(makeQueue().env);
     expect(await count("contacts")).toBe(1);

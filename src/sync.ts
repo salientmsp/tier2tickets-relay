@@ -57,6 +57,19 @@ interface ContactInsert {
   locationId: number | null;
 }
 
+/**
+ * Site id off a Gorelo device or contact.
+ *
+ * Gorelo renamed this field from `clientLocationId` to `locationId`. Both are optional
+ * on the response types, so reading only the old name compiled cleanly and quietly wrote
+ * NULL into every mirrored row — which then nulled the site on every ticket the relay
+ * filed. Read both, newest name first, so the mirror survives a response in either shape
+ * (and a region that has not rolled the rename out yet).
+ */
+function siteId(r: { locationId?: number | null; clientLocationId?: number | null }): number | null {
+  return r.locationId ?? r.clientLocationId ?? null;
+}
+
 function toDeviceRows(agents: PublicDeviceResponse[]): DeviceInsert[] {
   const rows: DeviceInsert[] = [];
   for (const a of agents) {
@@ -64,7 +77,7 @@ function toDeviceRows(agents: PublicDeviceResponse[]): DeviceInsert[] {
     rows.push({
       hostname: normalizeHost(a.displayName ?? a.name ?? ""),
       clientId: a.clientId,
-      locationId: a.clientLocationId ?? null,
+      locationId: siteId(a),
       agentId: a.id,
       assetNum: assetNum(a.id),
       displayName: (a.displayName ?? a.name ?? "").trim(),
@@ -146,7 +159,7 @@ export async function syncAll(env: Env): Promise<SyncStats> {
       email,
       name: contactName(ct),
       clientId: ct.clientId ?? null,
-      locationId: ct.clientLocationId ?? null,
+      locationId: siteId(ct),
     });
   }
 

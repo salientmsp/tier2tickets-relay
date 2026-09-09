@@ -81,7 +81,7 @@ wrangler d1 create tier2tickets-relay
 
 # 2. Apply the schema (optional — the Worker self-creates tables too)
 wrangler d1 migrations apply tier2tickets-relay          # remote
-wrangler d1 migrations apply tier2tickets-relay --local  # for `wrangler dev`
+npm run db:migrate:local                                 # for `wrangler dev`
 
 # 2b. Create the location-sync queue (one-time; syncAll fans location fetches
 #     out to it, a queue consumer reconciles them per client). Deploy fails
@@ -113,15 +113,101 @@ curl -X POST https://<your-worker-host>/admin/sync -H "X-Admin-Key: <ADMIN_KEY>"
 ```
 
 For local development, copy `.dev.vars.example` to `.dev.vars` (git-ignored) and
-run `wrangler dev`. See the workflow below.
+run `npm run dev` (which uses `wrangler.dev.toml`, not the production config above).
+See the workflow below.
+
+## Staging
+
+`[env.staging]` in `wrangler.toml` deploys the relay to a **separate Cloudflare tenant**:
+
+```bash
+npm run deploy:staging       # wrangler deploy --env staging
+```
+
+Everything above that block in `wrangler.toml` is production, and a bare `npm run deploy`
+still uses it. Wrangler does **not** inherit `vars`, `d1_databases` or `queues` into an
+environment (it warns, and the binding is simply absent), so `[env.staging]` repeats all
+of them. `account_id` and `triggers` *are* inherited, so staging restates both rather
+than silently following production. `npm run check:configs` fails if staging stops
+covering a production var, or if any staging identifier still points at production.
+
+Staging deliberately keeps production's **security** posture and drops its **side
+effects**:
+
+| Var | prod | staging | why |
+|---|---|---|---|
+| `ENFORCE_IP_ALLOWLIST` | `true` | `true` | staging is a public Worker whose endpoints file tickets |
+| `HALO_TOKEN_ENFORCE` | `enforce` | `enforce` | validating the real token posture is the point of staging |
+| `SEND_TICKET_CREATED_EMAIL` | `true` | `false` | a staging tenant seeded from prod carries real addresses |
+| `SENTRY_ENABLED` | `true` | `false` | the DSN is hardcoded; staging noise would land in the prod project |
+| `DEBUG_LOGS` | `false` | `false` | capture bodies are PII/PHI and persist in Workers Logs |
+
+Gorelo's base URL is **regional, not per-tenant** — the tenant is chosen by the
+`GORELO_API_KEY` secret. Staging therefore keeps the same `GORELO_BASE_URL` and reaches
+the staging Gorelo tenant purely via its own key.
+
+### First-time staging setup
+
+Secrets and D1 are **per-environment**; nothing carries over from production.
+
+```bash
+# 1. Fill the TODO(staging) values in wrangler.toml [env.staging]:
+#    account_id (the staging Cloudflare account) — without it, --env staging deploys
+#    into whichever tenant you are logged into, i.e. production.
+
+# 2. Create staging's own D1 + queue in that tenant, then paste the database_id back
+wrangler d1 create tier2tickets-relay-staging --env staging
+wrangler queues create tier2tickets-sync-staging --env staging
+npm run db:migrate:staging
+
+# 3. Re-derive the tenant-specific Gorelo ids against the STAGING key and paste them in
+#    (DEFAULT_GROUP_ID, DEFAULT_TYPE_ID, CATCHALL_CLIENT_ID, and the three tag ids are
+#     "0" placeholders until you do — staging is not functional before this step)
+GORELO_API_KEY=<staging key> ./scripts/gorelo-ids.sh
+
+# 4. Push staging's secrets (each needs --env staging)
+wrangler secret put GORELO_API_KEY --env staging      # the STAGING tenant's key
+wrangler secret put ADMIN_KEY --env staging
+wrangler secret put ALERT_SHARED_SECRET --env staging
+./scripts/halo-cred.sh tier2 --env staging            # --env passes through
+
+# 5. Deploy, then seed the staging mirror
+npm run deploy:staging
+curl -X POST https://<staging-host>/admin/sync -H "X-Admin-Key: <staging ADMIN_KEY>"
+```
+
+Because environments exist, a bare `wrangler deploy` now prints a warning that no target
+environment was given. That is informational: with no `--env`, it deploys the top-level
+production config, which is what `npm run deploy` intends.
 
 ## Local development
 
-Develop and test **without deploying to prod**. `wrangler dev` runs the Worker on
-Miniflare with a **local D1** (a SQLite file under `.wrangler/state`, keyed by the D1
-binding — the `database_id` in `wrangler.toml` is only used for `--remote`/`deploy`, so
-local state is fully isolated from prod) and local queues/crons. The vitest suite
-(`npm test`) likewise runs against an isolated in-memory D1 — neither touches prod.
+Develop and test **without deploying to prod**. Local runs use their own Wrangler
+config, **`wrangler.dev.toml`** — `npm run dev` passes `-c wrangler.dev.toml`, while
+`wrangler.toml` stays the production config that `npm run deploy` uses. Wrangler does not
+merge the two: the dev file stands alone, so it repeats every binding and carries its own
+`[vars]`. `npm run check:configs` (also a CI step) fails if `wrangler.toml` gains a var
+this config doesn't answer for, so they can't silently drift.
+
+The dev config differs from production where production is wrong-to-hostile locally:
+
+| Var | prod | dev | why |
+|---|---|---|---|
+| `ENFORCE_IP_ALLOWLIST` | `true` | `false` | `wrangler dev` has no `CF-Connecting-IP`, so an enabled allowlist rejects every local request |
+| `SEND_TICKET_CREATED_EMAIL` | `true` | `false` | a local press against a real contact would email a real person |
+| `SENTRY_ENABLED` | `true` | `false` | keeps dev noise out of the shared Sentry project |
+| `HALO_TOKEN_ENFORCE` | `enforce` | `off` | curl the Halo endpoints without minting a token first |
+| `DEBUG_LOGS` | `false` | `true` | full capture/response bodies — the point of running locally |
+
+Override any of them for a one-off in `.dev.vars`, which takes precedence over `[vars]`.
+
+`wrangler dev` runs the Worker on Miniflare with a **local D1** (a SQLite file under
+`.wrangler/state`) and local queues/crons. That file is keyed by **`database_id`**, which
+is why `wrangler.dev.toml` sets the nil UUID and the `db:*` scripts pass `-c
+wrangler.dev.toml` too — setup and dev must name the same id or `npm run dev` comes up
+against an empty database. The nil id also means `--remote` fails loudly instead of
+quietly reading and writing the production database. The vitest suite (`npm test`) runs
+against an isolated in-memory D1 — none of this touches prod.
 
 Outbound calls to **Gorelo are real**: point `GORELO_BASE_URL` / `GORELO_API_KEY` in
 `.dev.vars` at whatever tenant you want to exercise. That means a `triggered` alert
@@ -166,7 +252,7 @@ Then other devices reach it at **`http://<host-LAN-IP>:8787`** (find `<host-LAN-
 cp .dev.vars.example .dev.vars     # then fill in a real GORELO_API_KEY (+ ADMIN_KEY, etc.)
 npm ci                             # (skipped if the dev container already ran it)
 npm run dev:setup                  # apply migrations + seed synthetic data into local D1
-npm run dev                        # wrangler dev -> http://localhost:8787
+npm run dev                        # wrangler dev -c wrangler.dev.toml -> http://localhost:8787
 ```
 
 `dev:setup` runs `db:migrate:local` then `db:seed:local`. The seed

@@ -290,7 +290,7 @@ export class GoreloClient {
 
   /**
    * GET /v1/contacts — ALL contacts (the `clientId` filter is optional; each row
-   * carries its own clientId/clientLocationId). The sync uses this instead of one
+   * carries its own clientId/locationId). The sync uses this instead of one
    * call per client. Cursor-paginated since 2026-07-24, so getAllPages follows the
    * cursor across pages (a large page size keeps the page/subrequest count low).
    */
