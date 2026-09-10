@@ -1588,4 +1588,63 @@ describe("Halo eager create — matched Tier2 product", () => {
     expect(act.status).toBe(201);
     expect(creates).toBe(1); // eager create only — the note did NOT create a second ticket
   });
+
+  // The eager create already succeeded, so there's no queued command to fold the HDB
+  // report link into — but Gorelo's comment endpoint (added after this path was
+  // designed) means the link no longer has to be silently dropped: it's posted as a
+  // comment on the real ticket instead.
+  it("posts the /actions note's report link as a comment on the already-created ticket", async () => {
+    const cap = captureGoreloCreate({ number: 500780, displayNumber: "T-500780", uuid: "aa11bb22-cc33-4444-8888-999900001111" });
+    const comment = captureGoreloComment();
+    const created = await req(
+      "/tickets",
+      tier2Init([{ summary: "Printer down", details_html: reportHtml({ email: "user@corp.com" }) }]),
+    );
+    const id = ((await created.json()) as { id: number }).id;
+    expect(id).toBe(500780); // eager create — the real number, confirming no pending row exists
+
+    const act = await req(
+      "/actions",
+      tier2Init([
+        {
+          ticket_id: id,
+          note_html:
+            `You have a new ticket number ${id}. ` +
+            `<a href="https://portal.helpdeskbuttons.com/r/abc">View Report</a> ` +
+            `<a href="https://portal.helpdeskbuttons.com/c/abc">Connect to Computer</a>`,
+        },
+      ]),
+    );
+    expect(act.status).toBe(201);
+
+    const posted = comment.commented()!;
+    expect(String(posted.body)).toContain("View Report");
+    expect(String(posted.body)).toContain('<a href="https://portal.helpdeskbuttons.com/r/abc">');
+    expect(String(posted.body)).not.toContain("Connect to Computer"); // remote link still dropped
+
+    // The original ticket's own description is untouched — the link went on as a
+    // comment, not folded into the create body (which already happened).
+    expect(String(cap.posted()?.description)).not.toContain("View Report");
+  });
+
+  it("a note with no report link posts no comment (nothing to attach)", async () => {
+    captureGoreloCreate({ number: 500781, displayNumber: "T-500781" });
+    let commentCalls = 0;
+    routes.push({
+      method: "POST",
+      match: (u) => /^\/v1\/tickets\/[^/]+\/comments$/.test(u.pathname),
+      handler: () => {
+        commentCalls++;
+        return json(200, envelope({ id: "c1" }));
+      },
+    });
+    const created = await req(
+      "/tickets",
+      tier2Init([{ summary: "Printer down", details_html: reportHtml({ email: "user@corp.com" }) }]),
+    );
+    const id = ((await created.json()) as { id: number }).id;
+    const act = await req("/actions", tier2Init([{ ticket_id: id, note_html: "just a plain note" }]));
+    expect(act.status).toBe(201);
+    expect(commentCalls).toBe(0);
+  });
 });

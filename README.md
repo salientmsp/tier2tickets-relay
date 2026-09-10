@@ -394,10 +394,14 @@ never silently dropped.
 
 > **Note — Tier2 was previously a deferred two-step** (`/tickets` queued, `/actions`
 > folded the HDB "View Report" link in before creating). It's now eager so the
-> confirmation screen can show the real number; the trade is that the "View Report"
-> link the `/actions` note carried can't be added post-create (Gorelo has no
-> ticket-append endpoint), so it's dropped. The report summary itself is in the
-> `/tickets` body, so tickets keep their content.
+> confirmation screen can show the real number. The follow-up `/actions` note (which
+> carries the "View Report"/diagnostics link) arrives after the ticket already
+> exists, so it's posted as a **comment** on the real ticket (`POST /v1/tickets/
+> {id}/comments` — same endpoint the Huntress direct-resolution fix uses) rather than
+> folded into the create body. The "Connect to Computer" remote-session link is still
+> dropped (techs connect from Gorelo). A request that matches no known product still
+> takes the older deferred path (`/tickets` queues, `/actions` folds the link into the
+> create body before it exists at all).
 
 **Dead-letter (both paths):** a command that keeps failing to create is **dead-lettered**
 (logged + dropped) after `MAX_PENDING_ATTEMPTS`, so it can't retry forever — and if

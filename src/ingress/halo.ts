@@ -1105,8 +1105,33 @@ async function handleActions(env: Env, ctx: ExecutionContext | undefined, body: 
 
   const pending = await takePendingTicket(env.DB, haloId);
   if (!pending) {
-    // Already created (duplicate/late action) or unknown ticket — accept, no dup.
-    breadcrumb(`HALO action halo_id=${haloId}: no pending to attach — accepted`);
+    // The common case now that Tier2 creates eagerly on /tickets: the ticket already
+    // exists, so there's no queued command to fold this note into. Gorelo's comment
+    // endpoint (POST /v1/tickets/{id}/comments, added after this path was designed —
+    // same discovery as the Huntress direct-resolution fix) means the HDB report
+    // links no longer have to be silently dropped: post them as a comment on the
+    // real ticket instead. Best-effort — a failure here never blocks Tier2's /actions
+    // response, since the ticket itself is already created and correct.
+    const links = extractNoteLinks(noteText).filter(
+      (l) => !/connect to computer/i.test(l.label) && !/\/connect\b/i.test(l.href),
+    );
+    const original = links.length ? await getCreatedTicket(env.DB, haloId) : null;
+    if (original?.gorelo_id && links.length) {
+      const rendered = links
+        .map((l) => `${esc(l.label)}: <a href="${esc(l.href)}">${esc(l.href)}</a>`)
+        .join("<br>");
+      try {
+        await new GoreloClient(env).addTicketComment(
+          original.gorelo_id,
+          `<b>Helpdesk Buttons report</b><br>${rendered}`,
+        );
+        breadcrumb(`HALO action halo_id=${haloId}: attached ${links.length} report link(s) as a comment`);
+      } catch (err) {
+        breadcrumb(`HALO action comment failed halo_id=${haloId}: ${describeError(err)}`);
+      }
+    } else {
+      breadcrumb(`HALO action halo_id=${haloId}: no pending / no links to attach — accepted`);
+    }
     return jsonResponse(201, [{ id: actionId, ticket_id: haloId }]);
   }
 
