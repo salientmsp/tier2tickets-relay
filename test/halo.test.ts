@@ -1443,6 +1443,8 @@ describe("Halo immediate ticket create (one-shot product: Huntress)", () => {
           expect(update.calls()).toBe(1);
           expect(update.patched()).toMatchObject({ statusId: 5 });
           expect(String(comment.commented()!.body)).toContain("Huntress incident resolved");
+          // Shows which integration posted it, not a bare "API".
+          expect(comment.commented()!.createdByName).toBe("Huntress via API");
           expect(cap.posted()!.title).toBe("Suspicious login"); // unchanged — the original create, not a notice
 
           // The original now reads back as resolved (status 5) from the ledger.
@@ -1621,6 +1623,8 @@ describe("Halo eager create — matched Tier2 product", () => {
     expect(String(posted.body)).toContain("View Report");
     expect(String(posted.body)).toContain('<a href="https://portal.helpdeskbuttons.com/r/abc">');
     expect(String(posted.body)).not.toContain("Connect to Computer"); // remote link still dropped
+    // Shows which integration posted it, not a bare "API".
+    expect(posted.createdByName).toBe("Tier2Tickets via API");
 
     // The original ticket's own description is untouched — the link went on as a
     // comment, not folded into the create body (which already happened).

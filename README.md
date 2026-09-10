@@ -386,7 +386,10 @@ ticket directly**: `PATCH /v1/tickets/{id}` to `DEFAULT_RESOLVED_STATUS_ID` (fal
 to `DEFAULT_STATUS_ID` when unset), then `POST /v1/tickets/{id}/comments` with a short
 resolution note — both added to the Gorelo API after this relay's original
 "create-only" assumption was written (confirmed live 2026-09-10; `GoreloClient.
-updateTicket`/`addTicketComment`). Marks the original resolved in the ledger and echoes
+updateTicket`/`addTicketComment`). The comment is stamped with `CreatedByName` (`"<product>
+via API"`, e.g. `"Huntress via API"`) so the ticket timeline shows which integration
+posted it rather than a bare `"API"` — same for the Tier2 `/actions` report-link
+comment below. Marks the original resolved in the ledger and echoes
 the original id back as resolved. If the direct `PATCH` fails, or the ledger row somehow
 carries no `gorelo_id`, the relay falls back to the **old behavior** — filing a
 clearly-labeled `Resolved: …` notice ticket naming the original — so a resolution is

@@ -699,6 +699,16 @@ function asResolutionNotice(env: Env, cmd: CreatePublicTicketCommand, original: 
   if (original.contact_id) cmd.contactId = original.contact_id;
 }
 
+/**
+ * Display name for a comment the relay posts on a Gorelo ticket on a product's
+ * behalf (e.g. a resolution note, the Tier2 "View Report" link) — "<product> via
+ * API" instead of a bare "API", so the ticket shows which integration posted it.
+ * Falls back to a generic name when no product matched.
+ */
+function commentAuthorName(product: Product | null): string {
+  return `${product?.apiAuthorName ?? "Relay"} via API`;
+}
+
 /** The comment posted on the original Gorelo ticket when it's resolved directly (primary path). */
 function resolutionCommentHtml(): string {
   return (
@@ -988,7 +998,7 @@ async function handleResolution(
         `HALO resolved gorelo ticket ${original.gorelo_id} directly (halo_id=${original.halo_id} status=${rid})`,
       );
       // The status change already landed; a failed comment isn't worth losing that over.
-      await client.addTicketComment(original.gorelo_id, resolutionCommentHtml()).catch((err) => {
+      await client.addTicketComment(original.gorelo_id, resolutionCommentHtml(), commentAuthorName(product)).catch((err) => {
         breadcrumb(`HALO resolution comment failed gorelo_id=${original.gorelo_id}: ${describeError(err)}`);
       });
     } catch (err) {
@@ -1080,7 +1090,12 @@ function ticketNumberFromText(text: string): number | null {
  * ticket (explicit ticket id field, else the ticket number in the note text),
  * fold the note into the description, then create the Gorelo ticket.
  */
-async function handleActions(env: Env, ctx: ExecutionContext | undefined, body: string): Promise<Response> {
+async function handleActions(
+  env: Env,
+  ctx: ExecutionContext | undefined,
+  body: string,
+  product: Product | null,
+): Promise<Response> {
   const parsed = parseJson(body);
   const actions = (Array.isArray(parsed) ? parsed : [parsed]).filter(
     (a): a is Record<string, unknown> => a != null && typeof a === "object",
@@ -1124,6 +1139,7 @@ async function handleActions(env: Env, ctx: ExecutionContext | undefined, body: 
         await new GoreloClient(env).addTicketComment(
           original.gorelo_id,
           `<b>Helpdesk Buttons report</b><br>${rendered}`,
+          commentAuthorName(product),
         );
         breadcrumb(`HALO action halo_id=${haloId}: attached ${links.length} report link(s) as a comment`);
       } catch (err) {
@@ -1375,8 +1391,9 @@ async function handleApi(
     return jsonResponse(200, { tickets: [], record_count: 0 });
   }
   if (resource === "action" || resource === "actions") {
-    // The note folds into the queued ticket, which is then created in Gorelo.
-    if (method === "POST") return handleActions(env, ctx, body);
+    // The note folds into the queued ticket (deferred fallback), or attaches as a
+    // comment on the already-created one (the normal eager-create case).
+    if (method === "POST") return handleActions(env, ctx, body, matchProduct(request, env));
     return jsonResponse(200, []);
   }
   if (method === "GET") {

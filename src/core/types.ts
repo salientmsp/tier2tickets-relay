@@ -219,6 +219,11 @@ export interface UpdatePublicTicketCommand {
 export interface CreatePublicCommentCommand {
   conversationTypeId: number;
   body: string; // HTML
+  // Display name to show the comment as (the comment is still recorded as
+  // API-authored — this can't post as a specific real user). Unset shows a bare
+  // "API"; the relay sets it to "<product> via API" so a ticket shows which
+  // integration posted a comment on its behalf.
+  createdByName?: string;
 }
 
 /**

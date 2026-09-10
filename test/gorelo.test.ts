@@ -151,6 +151,16 @@ describe("GoreloClient (2026-08 envelope + PascalCase wire format)", () => {
     expect(sent).toEqual({ ConversationTypeId: 1, Body: "<b>Resolved</b>" });
   });
 
+  it("addTicketComment includes CreatedByName when given, so the comment shows which integration posted it", async () => {
+    let sent: Record<string, unknown> | undefined;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sent = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return json(200, { StatusCode: 200, IsSuccess: true, Data: { Id: "comment-uuid" }, DataContext: null, Notifications: [] });
+    }) as typeof fetch;
+    await client().addTicketComment("ticket-uuid", "<b>Resolved</b>", "Huntress via API");
+    expect(sent).toEqual({ ConversationTypeId: 1, Body: "<b>Resolved</b>", CreatedByName: "Huntress via API" });
+  });
+
   it("addTicketComment throws a GoreloError on non-2xx", async () => {
     globalThis.fetch = (async () => json(500, { StatusCode: 500, IsSuccess: false, Data: null, DataContext: null, Notifications: [] })) as typeof fetch;
     await expect(client().addTicketComment("ticket-uuid", "hi")).rejects.toMatchObject({

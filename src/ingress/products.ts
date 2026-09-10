@@ -41,6 +41,12 @@ export interface Product {
   deferCreate: boolean;
   // Submitter-name fallback for a ticket from this product when no contact resolves.
   ticketCreatedBy: string;
+  // Display name stamped on a comment the relay posts on this product's behalf
+  // (e.g. the Tier2 "View Report" link, a Huntress resolution note) — rendered as
+  // "<apiAuthorName> via API" so the ticket shows which integration posted it, not
+  // a bare "API". Distinct from `ticketCreatedBy` (that's the ticket's own submitter
+  // fallback, e.g. "Helpdesk Buttons" for tier2 — a different, more generic name).
+  apiAuthorName: string;
   // Heading over the pasted ticket body (Tier2 uses Helpdesk-Buttons "Report Summary").
   ticketBodyHeading: string;
 
@@ -85,13 +91,13 @@ export const PRODUCTS: Record<string, Product> = {
     clientSecretVar: "HALO_CLIENT_SECRET",
     // Eager create: the report is already in the /tickets body, so we create the
     // Gorelo ticket on /tickets and return its REAL number (Tier2 shows it on the
-    // "Help Data Delivered" screen). The follow-up /actions note only carried the
-    // HDB "View Report" link, which Gorelo has no way to append post-create, so it
-    // is intentionally dropped; /actions becomes a no-op (still a create fallback
-    // if the eager create failed and queued the command).
+    // "Help Data Delivered" screen). The follow-up /actions note's HDB "View Report"
+    // link is posted as a comment on the already-created ticket (still a create
+    // fallback if the eager create itself failed and queued the command).
     deferCreate: false,
     ticketCreatedBy: "Helpdesk Buttons",
     ticketBodyHeading: "Report Summary",
+    apiAuthorName: "Tier2Tickets",
     mapper: helpdeskButtonsMapper,
     tagVar: "HDB_TAG_ID", // "Submitted VIA HDB"
   },
@@ -112,6 +118,7 @@ export const PRODUCTS: Record<string, Product> = {
     deferCreate: false, // one-shot: the whole ticket arrives in the create, no /actions note
     ticketCreatedBy: "Huntress",
     ticketBodyHeading: "Details",
+    apiAuthorName: "Huntress",
     // Same mapper as Tier2: a Huntress free-text payload has no report table, so the
     // mapper's report parse yields {} and the description falls to the free-text branch.
     mapper: helpdeskButtonsMapper,

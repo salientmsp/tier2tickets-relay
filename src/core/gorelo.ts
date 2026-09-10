@@ -379,8 +379,8 @@ export class GoreloClient {
    * POST /v1/tickets/{ticketId}/comments — a Public (main-thread) comment; `body` is
    * HTML. Throws GoreloError on non-2xx.
    */
-  async addTicketComment(ticketId: string, bodyHtml: string): Promise<void> {
-    const cmd: CreatePublicCommentCommand = { conversationTypeId: 1, body: bodyHtml };
+  async addTicketComment(ticketId: string, bodyHtml: string, createdByName?: string): Promise<void> {
+    const cmd: CreatePublicCommentCommand = { conversationTypeId: 1, body: bodyHtml, createdByName };
     const res = await this.request(`/v1/tickets/${encodeURIComponent(ticketId)}/comments`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
