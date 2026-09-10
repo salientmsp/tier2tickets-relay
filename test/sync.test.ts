@@ -1,9 +1,9 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index.js";
-import { initSchema } from "../src/db.js";
-import { assetNum, syncAll } from "../src/sync.js";
-import type { SyncLocationsMessage } from "../src/types.js";
+import { initSchema } from "../src/core/db.js";
+import { assetNum, syncAll } from "../src/ingress/sync.js";
+import type { SyncLocationsMessage } from "../src/core/types.js";
 
 // --- outbound fetch stub: mock the Gorelo list endpoints the sync pulls --------
 interface GoreloData {

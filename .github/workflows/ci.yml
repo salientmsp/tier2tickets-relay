@@ -23,8 +23,13 @@ jobs:
 
       - uses: actions/setup-node@v7.0.0
         with:
-          node-version: 26.8.1
+          node-version: 26.8.2
           cache: npm
+
+      # Structural check — no dependencies needed, so run it before install to
+      # fail fast on any ingress↔egress boundary violation.
+      - name: Check import boundaries
+        run: npm run lint:boundaries
 
       - name: Install dependencies
         run: npm ci

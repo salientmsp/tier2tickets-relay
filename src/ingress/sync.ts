@@ -1,13 +1,13 @@
-import { initSchema, setLastSync, setSyncMeta } from "./db.js";
-import { GoreloClient } from "./gorelo.js";
-import { breadcrumb, describeError } from "./log.js";
-import { normalizeHost } from "./parse.js";
+import { initSchema, setLastSync, setSyncMeta } from "../core/db.js";
+import { GoreloClient } from "../core/gorelo.js";
+import { breadcrumb, describeError } from "../core/log.js";
+import { normalizeHost } from "../core/parse.js";
 import type {
   Env,
   PublicClientLocationResponse,
   PublicContactResponse,
   PublicDeviceResponse,
-} from "./types.js";
+} from "../core/types.js";
 
 // Insert batches are lists of SINGLE-ROW prepared statements, so D1's per-query
 // bound-parameter cap applies to each row (≤10 vars for the widest, devices), not

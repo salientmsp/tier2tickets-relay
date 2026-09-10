@@ -1,5 +1,6 @@
 import { breadcrumb } from "./log.js";
 import type {
+  CreatePublicCommentCommand,
   CreatePublicTicketCommand,
   Env,
   PostAlertRequest,
@@ -9,6 +10,7 @@ import type {
   PublicDeviceResponse,
   PublicTicketListItem,
   PublicTicketListResponse,
+  UpdatePublicTicketCommand,
 } from "./types.js";
 
 /** Error carrying the upstream Gorelo HTTP status so the handler can surface a 502. */
@@ -149,7 +151,7 @@ export function firstNotificationCode(body: string): string | null {
  * `/\/+$/` backtracks quadratically on inputs with long runs of slashes, so
  * we walk back from the end by hand instead — O(n) regardless of the input.
  */
-function stripTrailingSlashes(s: string): string {
+export function stripTrailingSlashes(s: string): string {
   let end = s.length;
   while (end > 0 && s.charCodeAt(end - 1) === 47 /* '/' */) end--;
   return s.slice(0, end);
@@ -352,6 +354,42 @@ export class GoreloClient {
     }
     // Peel the envelope so the caller reads the create result ({ id }) directly.
     return unwrap(parsed).data ?? parsed;
+  }
+
+  /**
+   * PATCH /v1/tickets/{ticketId} — a genuine partial update, added to the Gorelo API
+   * after this client's original "create-only" assumption was written (confirmed live
+   * 2026-09-10). The relay only ever sends `statusId` (closing the original ticket on
+   * a Huntress resolution — see handleResolution in ingress/halo.ts). Throws
+   * GoreloError on non-2xx so the caller can fall back / queue a retry.
+   */
+  async updateTicket(ticketId: string, patch: UpdatePublicTicketCommand): Promise<void> {
+    const res = await this.request(`/v1/tickets/${encodeURIComponent(ticketId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(rekey(patch, pascalKey)),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw GoreloError.fromBody(`PATCH /v1/tickets/${ticketId} failed`, res.status, body);
+    }
+  }
+
+  /**
+   * POST /v1/tickets/{ticketId}/comments — a Public (main-thread) comment; `body` is
+   * HTML. Throws GoreloError on non-2xx.
+   */
+  async addTicketComment(ticketId: string, bodyHtml: string): Promise<void> {
+    const cmd: CreatePublicCommentCommand = { conversationTypeId: 1, body: bodyHtml };
+    const res = await this.request(`/v1/tickets/${encodeURIComponent(ticketId)}/comments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(rekey(cmd, pascalKey)),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw GoreloError.fromBody(`POST /v1/tickets/${ticketId}/comments failed`, res.status, body);
+    }
   }
 
   /**

@@ -58,6 +58,11 @@ ENFORCE_IP_ALLOWLIST = "false"
 ENABLE_TIER2 = "true"
 ENABLE_HUNTRESS = "true"
 
+# OFF for dev. Jira is a REAL outbound dependency (there is no Jira sandbox), so a local
+# run must not mirror test tickets into a client's real Jira. Set ENABLE_JIRA="true" +
+# JIRA_TARGETS in .dev.vars for a one-off fan-out test against your own free Jira site.
+ENABLE_JIRA = "false"
+
 # --- Gorelo IDs -------------------------------------------------------------------
 # Tenant metadata (groups/types/statuses/tags) that scripts/seed-dev.sql does not model,
 # so these match wrangler.toml — a locally-created ticket lands in the same queue it

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { GoreloClient, clampPageSize, extractTicketNumber, firstNotificationCode, retryDelayMs } from "../src/gorelo.js";
-import type { CreatePublicTicketCommand, Env } from "../src/types.js";
+import { GoreloClient, clampPageSize, extractTicketNumber, firstNotificationCode, retryDelayMs } from "../src/core/gorelo.js";
+import type { CreatePublicTicketCommand, Env } from "../src/core/types.js";
 
 describe("extractTicketNumber", () => {
   it("reads the live create-response `id` field", () => {
@@ -110,6 +110,52 @@ describe("GoreloClient (2026-08 envelope + PascalCase wire format)", () => {
       name: "GoreloError",
       status: 400,
       code: "070101",
+    });
+  });
+
+  it("updateTicket PATCHes a PascalCase body against /v1/tickets/{id}", async () => {
+    let sent: { method?: string; url?: string; body?: Record<string, unknown> } = {};
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      sent = { method: init?.method, url: String(input), body: JSON.parse(String(init?.body)) };
+      return json(200, { StatusCode: 200, IsSuccess: true, Data: { Id: "ticket-uuid" }, DataContext: null, Notifications: [] });
+    }) as typeof fetch;
+    await client().updateTicket("ticket-uuid", { statusId: 5 });
+    expect(sent.method).toBe("PATCH");
+    expect(sent.url).toBe("https://gorelo.test/v1/tickets/ticket-uuid");
+    expect(sent.body).toEqual({ StatusId: 5 });
+  });
+
+  it("updateTicket throws a GoreloError carrying the 6-digit Notifications code", async () => {
+    globalThis.fetch = (async () =>
+      json(400, {
+        StatusCode: 400,
+        IsSuccess: false,
+        Data: null,
+        DataContext: { TraceId: "t1" },
+        Notifications: [{ Code: "070101", Message: "Ticket not found." }],
+      })) as typeof fetch;
+    await expect(client().updateTicket("missing-uuid", { statusId: 5 })).rejects.toMatchObject({
+      name: "GoreloError",
+      status: 400,
+      code: "070101",
+    });
+  });
+
+  it("addTicketComment POSTs a Public comment (ConversationTypeId 1) with the HTML body", async () => {
+    let sent: Record<string, unknown> | undefined;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sent = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return json(200, { StatusCode: 200, IsSuccess: true, Data: { Id: "comment-uuid" }, DataContext: null, Notifications: [] });
+    }) as typeof fetch;
+    await client().addTicketComment("ticket-uuid", "<b>Resolved</b>");
+    expect(sent).toEqual({ ConversationTypeId: 1, Body: "<b>Resolved</b>" });
+  });
+
+  it("addTicketComment throws a GoreloError on non-2xx", async () => {
+    globalThis.fetch = (async () => json(500, { StatusCode: 500, IsSuccess: false, Data: null, DataContext: null, Notifications: [] })) as typeof fetch;
+    await expect(client().addTicketComment("ticket-uuid", "hi")).rejects.toMatchObject({
+      name: "GoreloError",
+      status: 500,
     });
   });
 

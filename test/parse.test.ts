@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeEmail, normalizeHost } from "../src/parse.js";
+import { normalizeEmail, normalizeHost } from "../src/core/parse.js";
 
 describe("normalization helpers", () => {
   it("normalizeHost strips domain and lowercases", () => {

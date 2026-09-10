@@ -1,5 +1,5 @@
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
-import type { Env as WorkerEnv } from "../src/types.js";
+import type { Env as WorkerEnv } from "../src/core/types.js";
 
 // @cloudflare/vitest-pool-workers >=0.6 types `env` from "cloudflare:test" as
 // Cloudflare.Env. Augment it with this Worker's binding/var shape.

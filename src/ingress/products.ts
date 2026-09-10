@@ -1,5 +1,7 @@
-import { breadcrumb } from "./log.js";
-import type { Env } from "./types.js";
+import { breadcrumb } from "../core/log.js";
+import type { Env } from "../core/types.js";
+import { helpdeskButtonsMapper } from "./mappers/index.js";
+import type { ProductMapper } from "./mappers/index.js";
 
 /**
  * A source product whose Halo integration posts into this relay. Access is
@@ -42,6 +44,13 @@ export interface Product {
   // Heading over the pasted ticket body (Tier2 uses Helpdesk-Buttons "Report Summary").
   ticketBodyHeading: string;
 
+  // The per-product parsing + description strategy (src/ingress/mappers/). Encapsulates
+  // everything payload-SHAPED: what the inbound body looks like and how the ticket body
+  // is rendered. Tier2 and Huntress share the Helpdesk Buttons mapper — the report-table
+  // vs free-text branch is data-driven, not product-specific — so there is no genuine
+  // divergence to split. A vendor with a different payload shape supplies its own mapper.
+  mapper: ProductMapper;
+
   // Optional per-product "Submitted via …" tag, resolved from this Env var (a Gorelo
   // tag id). When set and non-empty, every ticket from this product is tagged with it
   // so you can filter/report by source (tier2 -> HDB_TAG_ID, huntress -> HUNTRESS_TAG_ID).
@@ -83,6 +92,7 @@ export const PRODUCTS: Record<string, Product> = {
     deferCreate: false,
     ticketCreatedBy: "Helpdesk Buttons",
     ticketBodyHeading: "Report Summary",
+    mapper: helpdeskButtonsMapper,
     tagVar: "HDB_TAG_ID", // "Submitted VIA HDB"
   },
   // Huntress — additional source IPs + /28 ranges. Opt-in (off by default).
@@ -102,6 +112,9 @@ export const PRODUCTS: Record<string, Product> = {
     deferCreate: false, // one-shot: the whole ticket arrives in the create, no /actions note
     ticketCreatedBy: "Huntress",
     ticketBodyHeading: "Details",
+    // Same mapper as Tier2: a Huntress free-text payload has no report table, so the
+    // mapper's report parse yields {} and the description falls to the free-text branch.
+    mapper: helpdeskButtonsMapper,
     tagVar: "HUNTRESS_TAG_ID", // "Submitted via Huntress"
   },
 };

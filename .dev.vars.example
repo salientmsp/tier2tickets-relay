@@ -47,3 +47,28 @@ HALO_CLIENT_SECRET="halo-mock-client-secret"
 # Huntress uses its own (its distinct client_id). Uncomment to enable validation:
 # HALO_CLIENT_ID_HUNTRESS="13b3832f9306b677fb72eea412da5df7"
 # HALO_CLIENT_SECRET_HUNTRESS="huntress-mock-client-secret"
+
+# Optional: egress Jira fan-out for co-managed clients. Set ENABLE_JIRA (a [vars]
+# flag in wrangler.toml) to "true", and list each enrolled client's Jira destination
+# here as a JSON array (this secret holds credentials). A client is sent to Jira only
+# when its Gorelo clientId has an entry below. "resolvedTransition" is the workflow
+# transition used to close the issue on a ticket resolution (optional).
+#
+# Use a dedicated Atlassian SERVICE ACCOUNT for the credential — never a real
+# employee's personal login (support.atlassian.com/user-management/docs/understand-service-accounts/):
+# created in Atlassian Administration -> Directory -> Service accounts, it has no
+# password, isn't tied to anyone leaving, and doesn't count against user-license seats.
+# Either auth mode below works with a service account; pick one per client entry.
+#
+# Mode 1 — API token (simplest): Atlassian Administration -> Directory -> Service
+# accounts -> the account -> Create credentials -> API token (or, if you can't create
+# service accounts yet, a token generated at id.atlassian.com/manage-profile/security/api-tokens
+# while logged in AS the service account).
+# JIRA_TARGETS='[{"clientId":15567,"baseUrl":"https://acme.atlassian.net","projectKey":"SEC","issueType":"Task","email":"svc@acme.com","apiToken":"your-jira-api-token","resolvedTransition":"Done"}]'
+#
+# Mode 2 — OAuth 2.0 (machine-to-machine, no password/token to rotate by hand):
+# Atlassian Administration -> Directory -> Service accounts -> the account ->
+# Create credentials -> OAuth 2.0 -> select Jira scopes (read:jira-work, write:jira-work
+# cover create/comment/transition). Uses client_credentials against auth.atlassian.com,
+# so JiraClient calls api.atlassian.com/ex/jira/{cloudId} instead of the site directly.
+# JIRA_TARGETS='[{"clientId":15567,"baseUrl":"https://acme.atlassian.net","projectKey":"SEC","issueType":"Task","oauthClientId":"your-oauth-client-id","oauthClientSecret":"your-oauth-client-secret","resolvedTransition":"Done"}]'

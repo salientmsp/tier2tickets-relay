@@ -1,10 +1,10 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index.js";
-import { flushPendingTickets, haloResource, isHaloPath, isHaloRequest } from "../src/halo.js";
-import { initSchema } from "../src/db.js";
-import { assetNum } from "../src/sync.js";
-import { signToken } from "../src/token.js";
+import { flushPendingTickets, haloResource, isHaloPath, isHaloRequest } from "../src/ingress/halo.js";
+import { initSchema } from "../src/core/db.js";
+import { assetNum } from "../src/ingress/sync.js";
+import { signToken } from "../src/core/token.js";
 
 const HOST = "https://t2t.example.com";
 const AGENT_UUID = "3fa85f64-5717-4562-b3fc-2c963f66afa6";
@@ -558,6 +558,43 @@ function captureGoreloCreate(
     posted: () => (posted ? (camel(posted) as Record<string, unknown>) : undefined),
     postedRaw: () => posted,
   };
+}
+
+/** Mock PATCH /v1/tickets/{id} — the direct ticket-resolution update. */
+function captureGoreloUpdate(opts: { ok?: boolean } = {}): {
+  patched: () => Record<string, unknown> | undefined;
+  calls: () => number;
+} {
+  const ok = opts.ok ?? true;
+  let patched: Record<string, unknown> | undefined;
+  let calls = 0;
+  routes.push({
+    method: "PATCH",
+    match: (u) => /^\/v1\/tickets\/[^/]+$/.test(u.pathname),
+    handler: async (r) => {
+      calls++;
+      patched = (await r.json()) as Record<string, unknown>;
+      return ok ? json(200, envelope({ id: null })) : new Response("", { status: 500 });
+    },
+  });
+  return { patched: () => (patched ? (camel(patched) as Record<string, unknown>) : undefined), calls: () => calls };
+}
+
+/** Mock POST /v1/tickets/{id}/comments — the resolution comment. */
+function captureGoreloComment(opts: { ok?: boolean } = {}): {
+  commented: () => Record<string, unknown> | undefined;
+} {
+  const ok = opts.ok ?? true;
+  let commented: Record<string, unknown> | undefined;
+  routes.push({
+    method: "POST",
+    match: (u) => /^\/v1\/tickets\/[^/]+\/comments$/.test(u.pathname),
+    handler: async (r) => {
+      commented = (await r.json()) as Record<string, unknown>;
+      return ok ? json(200, envelope({ id: "6b1f5b2e-0000-4000-8000-000000000000" })) : new Response("", { status: 500 });
+    },
+  });
+  return { commented: () => (commented ? (camel(commented) as Record<string, unknown>) : undefined) };
 }
 
 describe("Halo deferred ticket create (/tickets queues, /actions creates)", () => {
@@ -1374,9 +1411,10 @@ describe("Halo immediate ticket create (one-shot product: Huntress)", () => {
     });
 
     // Huntress resolves an incident by EDITING the original ticket (POST /Tickets with
-    // its id) to a "resolved" status. Gorelo can't update a ticket, so the relay files a
-    // labeled resolution notice, marks the original resolved, and echoes the original id.
-    it("files a labeled resolution notice and marks the original resolved on a Huntress edit", async () => {
+    // its id) to a "resolved" status. The relay resolves the ORIGINAL Gorelo ticket
+    // directly (PATCH statusId + a comment) — added to the Gorelo API after this
+    // relay's original "no update endpoint" assumption; confirmed live 2026-09-10.
+    it("resolves the original Gorelo ticket directly (PATCH + comment), filing no new ticket", async () => {
       await withHuntressEnabled(async () => {
         await env.DB.prepare(`DELETE FROM created_tickets`).run();
         const e = env as { DEFAULT_RESOLVED_STATUS_ID?: string };
@@ -1384,6 +1422,8 @@ describe("Halo immediate ticket create (one-shot product: Huntress)", () => {
         e.DEFAULT_RESOLVED_STATUS_ID = "5"; // the Gorelo "Resolved" status id
         try {
           const cap = captureGoreloCreate({ number: 700900, displayNumber: "T-700900" });
+          const update = captureGoreloUpdate();
+          const comment = captureGoreloComment();
           // 1) Original alert -> Gorelo ticket, ledgered under number 700900.
           const created = await req(
             "/api/Tickets",
@@ -1399,16 +1439,54 @@ describe("Halo immediate ticket create (one-shot product: Huntress)", () => {
           // Echoes the ORIGINAL id, now resolved (status 5) — Huntress edited THAT id.
           expect(body).toMatchObject({ id: 700900, status_id: 5, gorelo_ticket_number: 700900 });
 
+          // The ORIGINAL ticket was updated directly — no second ticket was created.
+          expect(update.calls()).toBe(1);
+          expect(update.patched()).toMatchObject({ statusId: 5 });
+          expect(String(comment.commented()!.body)).toContain("Huntress incident resolved");
+          expect(cap.posted()!.title).toBe("Suspicious login"); // unchanged — the original create, not a notice
+
+          // The original now reads back as resolved (status 5) from the ledger.
+          const got = await req("/api/Tickets/700900", huntressGet);
+          expect(((await got.json()) as Record<string, unknown>).status_id).toBe(5);
+        } finally {
+          e.DEFAULT_RESOLVED_STATUS_ID = prev;
+        }
+      });
+    });
+
+    // Fallback path: preserved for when the direct update itself fails (or the
+    // original has no gorelo_id on record) — so a resolution is never silently
+    // dropped, the relay falls back to filing a clearly-labeled notice ticket.
+    it("falls back to a labeled resolution notice when the direct update fails", async () => {
+      await withHuntressEnabled(async () => {
+        await env.DB.prepare(`DELETE FROM created_tickets`).run();
+        const e = env as { DEFAULT_RESOLVED_STATUS_ID?: string };
+        const prev = e.DEFAULT_RESOLVED_STATUS_ID;
+        e.DEFAULT_RESOLVED_STATUS_ID = "5";
+        try {
+          const cap = captureGoreloCreate({ number: 700901, displayNumber: "T-700901" });
+          captureGoreloUpdate({ ok: false }); // the direct PATCH fails
+          const created = await req(
+            "/api/Tickets",
+            huntressInit([{ summary: "Suspicious login", details: "anomalous", client_id: "10" }]),
+          );
+          const id = ((await created.json()) as { id: number }).id;
+          expect(id).toBe(700901);
+
+          const resolved = await req("/api/Tickets", huntressInit([{ id, status_id: 3 }]));
+          expect(resolved.status).toBe(200);
+          const body = (await resolved.json()) as Record<string, unknown>;
+          expect(body).toMatchObject({ id: 700901, status_id: 5, gorelo_ticket_number: 700901 });
+
           // The notice filed in Gorelo is clearly labeled, resolved, and references the original.
           const notice = cap.posted()!;
           expect(String(notice.title)).toBe("Resolved: Suspicious login");
           expect(notice.statusId).toBe(5);
           expect(notice.sendTicketCreatedEmail).toBe(false);
           expect(String(notice.description)).toContain("Huntress incident resolved");
-          expect(String(notice.description)).toContain("T-700900");
+          expect(String(notice.description)).toContain("T-700901");
 
-          // The original now reads back as resolved (status 5) from the ledger.
-          const got = await req("/api/Tickets/700900", huntressGet);
+          const got = await req("/api/Tickets/700901", huntressGet);
           expect(((await got.json()) as Record<string, unknown>).status_id).toBe(5);
         } finally {
           e.DEFAULT_RESOLVED_STATUS_ID = prev;

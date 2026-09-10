@@ -4,7 +4,7 @@
 // applied so later syncs skip the whole idempotent block — it costs ~14
 // subrequests every run otherwise, and syncAll runs under the Worker's
 // per-invocation subrequest cap.
-const SCHEMA_VERSION = "4";
+const SCHEMA_VERSION = "5";
 
 /** Create the mirror tables + indexes if they don't exist (idempotent). */
 export async function initSchema(db: D1Database): Promise<void> {
@@ -96,9 +96,28 @@ export async function initSchema(db: D1Database): Promise<void> {
         client_id      INTEGER,
         contact_id     INTEGER,
         status_id      INTEGER,
-        created_at     TEXT NOT NULL
+        created_at     TEXT NOT NULL,
+        jira_issue_key TEXT
       )`,
     ),
+    // Durable retry queue for the egress Jira fan-out (co-managed clients). A create
+    // or close that fails in the request's waitUntil is enqueued here and drained by
+    // the */5 cron alongside pending_tickets — same resilience, kept in its own table
+    // so an egress outage never touches Gorelo ticket delivery. Only non-secret
+    // routing data is stored (client_id + the issue payload); credentials stay in the
+    // JIRA_TARGETS secret, resolved by client_id at flush time.
+    db.prepare(
+      `CREATE TABLE IF NOT EXISTS pending_jira (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind       TEXT NOT NULL,
+        client_id  INTEGER NOT NULL,
+        halo_id    INTEGER,
+        payload    TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        attempts   INTEGER NOT NULL DEFAULT 0
+      )`,
+    ),
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_pending_jira_created ON pending_jira (created_at)`),
     // Monitoring alerts (POST /v1/alerts -> Gorelo's native POST /v1/alerts/). One row
     // per `dedupe_key` — the stable identity a monitoring source (e.g. an on-prem SQL
     // server) reuses across retries. `status` is our own lifecycle ('open' |
@@ -190,6 +209,13 @@ export async function initSchema(db: D1Database): Promise<void> {
   // Additive migration: attempts counter on an older pending_tickets table.
   try {
     await db.prepare(`ALTER TABLE pending_tickets ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`).run();
+  } catch {
+    // column already exists — fine
+  }
+  // Additive migration: the Jira issue key on a created_tickets table that predates
+  // the Jira fan-out. Needed to close the linked Jira issue on a ticket resolution.
+  try {
+    await db.prepare(`ALTER TABLE created_tickets ADD COLUMN jira_issue_key TEXT`).run();
   } catch {
     // column already exists — fine
   }
@@ -495,6 +521,10 @@ export interface CreatedTicketRow {
   contact_id: number | null;
   status_id: number | null;
   created_at: string;
+  // The linked Jira issue key (e.g. "ACME-123"), set when the ticket was fanned out
+  // to a co-managed client's Jira by the egress subscriber. Null when there is no Jira
+  // mirror. Read on a resolution to close that issue; doubles as a create-dedup guard.
+  jira_issue_key?: string | null;
 }
 
 /** Record a ticket we created in Gorelo, keyed by the Halo id handed to the client. */
@@ -502,13 +532,16 @@ export async function putCreatedTicket(db: D1Database, row: CreatedTicketRow): P
   await db
     .prepare(
       `INSERT INTO created_tickets
-         (halo_id, gorelo_id, number, display_number, title, client_id, contact_id, status_id, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?)
+         (halo_id, gorelo_id, number, display_number, title, client_id, contact_id, status_id, created_at, jira_issue_key)
+       VALUES (?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(halo_id) DO UPDATE SET
          gorelo_id = excluded.gorelo_id, number = excluded.number,
          display_number = excluded.display_number, title = excluded.title,
          client_id = excluded.client_id, contact_id = excluded.contact_id,
-         status_id = excluded.status_id, created_at = excluded.created_at`,
+         status_id = excluded.status_id, created_at = excluded.created_at,
+         -- Preserve an existing jira_issue_key when a later upsert (e.g. a resolution
+         -- status change) doesn't carry one, so the link isn't lost.
+         jira_issue_key = COALESCE(excluded.jira_issue_key, created_tickets.jira_issue_key)`,
     )
     .bind(
       row.halo_id,
@@ -520,6 +553,7 @@ export async function putCreatedTicket(db: D1Database, row: CreatedTicketRow): P
       row.contact_id,
       row.status_id,
       row.created_at,
+      row.jira_issue_key ?? null,
     )
     .run();
 }
@@ -528,11 +562,72 @@ export async function putCreatedTicket(db: D1Database, row: CreatedTicketRow): P
 export async function getCreatedTicket(db: D1Database, haloId: number): Promise<CreatedTicketRow | null> {
   return db
     .prepare(
-      `SELECT halo_id, gorelo_id, number, display_number, title, client_id, contact_id, status_id, created_at
+      `SELECT halo_id, gorelo_id, number, display_number, title, client_id, contact_id, status_id, created_at, jira_issue_key
        FROM created_tickets WHERE halo_id = ? LIMIT 1`,
     )
     .bind(haloId)
     .first<CreatedTicketRow>();
+}
+
+/** Store the linked Jira issue key on a created ticket (after a successful fan-out). */
+export async function setCreatedTicketJiraKey(
+  db: D1Database,
+  haloId: number,
+  jiraIssueKey: string,
+): Promise<void> {
+  await db
+    .prepare(`UPDATE created_tickets SET jira_issue_key = ? WHERE halo_id = ?`)
+    .bind(jiraIssueKey, haloId)
+    .run();
+}
+
+// --- Jira fan-out retry queue (co-managed clients) --------------------------
+
+/** A queued Jira job: create an issue, or close one, for a co-managed client. */
+export interface PendingJiraRow {
+  id: number;
+  kind: string; // "create" | "close"
+  client_id: number;
+  halo_id: number | null;
+  payload: string; // JSON — the create fields or the close details
+  created_at: string;
+  attempts: number;
+}
+
+/** Enqueue a Jira job for the cron flush to retry. */
+export async function putPendingJira(
+  db: D1Database,
+  job: { kind: string; clientId: number; haloId: number | null; payload: string; createdAt: string; attempts?: number },
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO pending_jira (kind, client_id, halo_id, payload, created_at, attempts)
+       VALUES (?,?,?,?,?,?)`,
+    )
+    .bind(job.kind, job.clientId, job.haloId, job.payload, job.createdAt, job.attempts ?? 0)
+    .run();
+}
+
+/**
+ * Atomically claim (delete + return) the oldest queued Jira job older than the
+ * cutoff, or null when none are eligible. The cutoff gives a failed job a grace
+ * window before retry: a re-queued job gets a FRESH created_at, so it can't be
+ * re-claimed within the same flush run (no same-run retry storm) — the same backoff
+ * shape as takeStalePendingTickets.
+ */
+export async function takeStalePendingJira(
+  db: D1Database,
+  cutoffIso: string,
+): Promise<PendingJiraRow | null> {
+  return db
+    .prepare(
+      `DELETE FROM pending_jira WHERE id = (
+         SELECT id FROM pending_jira WHERE created_at < ? ORDER BY created_at, id LIMIT 1
+       )
+       RETURNING id, kind, client_id, halo_id, payload, created_at, attempts`,
+    )
+    .bind(cutoffIso)
+    .first<PendingJiraRow>();
 }
 
 /** Atomically claim (delete + return) one pending ticket by its Halo id. */

@@ -18,22 +18,31 @@ import {
   type ContactRow,
   type CreatedTicketRow,
   type DeviceFullRow,
-} from "./db.js";
+} from "../core/db.js";
 import { notify } from "@ambersecurityinc/notifly";
-import { GoreloClient, GoreloError, extractTicketNumber } from "./gorelo.js";
-import { breadcrumb, debug, debugOn, describeError } from "./log.js";
-import { normalizeEmail, normalizeHost } from "./parse.js";
+import { GoreloClient, GoreloError, extractTicketNumber } from "../core/gorelo.js";
+import { breadcrumb, debug, debugOn, describeError } from "../core/log.js";
+import { normalizeEmail } from "../core/parse.js";
 import { assetNum, syncAll } from "./sync.js";
 import { haloCredentials, ipAllowed, matchProduct, type Product } from "./products.js";
 import { haloPriority, haloStatus, haloTeam, haloTicketType } from "./haloShapes.js";
-import { signToken, verifyTokenResult, type TokenPayload } from "./token.js";
+import { signToken, verifyTokenResult, type TokenPayload } from "../core/token.js";
+import { emitTicketCreated, emitTicketResolved } from "../core/events.js";
+import { notiflyUrls } from "../core/notify.js";
+import { decodeEntities, esc, heading, htmlToText, num, str } from "./html.js";
+import {
+  mapperFor,
+  HALO_UNREGISTERED_EMAIL,
+  HALO_UNREGISTERED_USER_ID,
+  type HaloTicket,
+} from "./mappers/index.js";
 import type {
   CreatePublicTicketCommand,
   Env,
   PublicDeviceResponse,
   PublicTicketPriority,
   TicketSource,
-} from "./types.js";
+} from "../core/types.js";
 
 /**
  * HaloPSA/HaloITSM mock — PHASE 2 (Gorelo-backed).
@@ -51,11 +60,8 @@ import type {
  * request/response shapes can be refined against real traffic.
  */
 
-const HALO_UNREGISTERED_EMAIL = "unregistered@helpdeskbuttons.com";
-// Synthetic id for the unregistered catch-all user. Non-zero (Halo user ids are
-// positive) and high enough not to collide with a real Gorelo contact id; on
-// ticket create it resolves to no contact -> catch-all client.
-const HALO_UNREGISTERED_USER_ID = 999_999_999;
+// HALO_UNREGISTERED_EMAIL / HALO_UNREGISTERED_USER_ID (the Tier2/HDB catch-all user)
+// live with the Helpdesk Buttons mapper — imported above.
 
 // Tier2 sends this header on every Halo request — the most reliable discriminator.
 export const HALO_HEADER = "halo-app-name";
@@ -450,8 +456,6 @@ function handleConfig(env: Env, resource: string): Response {
 
 // --- Ticket create (POST /tickets) + note (POST /actions) -------------------
 
-type HaloTicket = Record<string, unknown>;
-
 function firstTicket(parsed: unknown): HaloTicket {
   if (Array.isArray(parsed)) return (parsed[0] ?? {}) as HaloTicket;
   if (parsed && typeof parsed === "object") return parsed as HaloTicket;
@@ -466,12 +470,6 @@ function parseJson(body: string): unknown {
   }
 }
 
-const str = (v: unknown): string => (typeof v === "string" ? v : v == null ? "" : String(v));
-const num = (v: unknown): number | null => {
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) && n !== 0 ? n : null;
-};
-
 // Deferred-create grace: how long a queued /tickets command waits for its
 // /actions note before the cron orphan-flush creates it note-less. Tier2 posts
 // the action ~1s after the ticket, so this is a generous safety margin.
@@ -482,86 +480,9 @@ const MAX_PENDING_ATTEMPTS = 5;
 
 const nowIso = (): string => new Date().toISOString();
 
-// --- HTML report parsing ----------------------------------------------------
-// Tier2 files every press under the hardcoded `unregistered@helpdeskbuttons.com`
-// user (-> our synthetic id + catch-all client). The REAL reporter identity is
-// only in the "Report Summary" table inside details_html, so we parse it out to
-// resolve the actual Gorelo contact/company/asset.
-
-function stripTags(s: string): string {
-  return s.replace(/<[^>]*>/g, " ");
-}
-function decodeEntities(s: string): string {
-  // Decode `&amp;` LAST: doing it first would let a literal `&lt;` (written
-  // `&amp;lt;`) collapse to `<` on a later pass — a double-unescape. By the
-  // time `&amp;` runs, no other rule can re-interpret the `&`s it produces.
-  return s
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;|&apos;/gi, "'")
-    .replace(/&amp;/gi, "&");
-}
-function htmlToText(s: string): string {
-  // Drop non-content blocks first — a full HTML email (the /actions note) carries
-  // <head>/<style> with @font-face/@media rules that otherwise flatten into noise.
-  // Match end tags tolerantly (`</script >`, `</script\t\n bar>`): a browser
-  // closes on `</script` followed by anything up to the next `>`, so a naive
-  // `</script>` would leave the block's contents behind to flatten into the
-  // extracted text. `[^>]*>` consumes any trailing junk before the `>`.
-  const stripped = s
-    .replace(/<style[\s\S]*?<\/style[^>]*>/gi, " ")
-    .replace(/<script[\s\S]*?<\/script[^>]*>/gi, " ")
-    .replace(/<head[\s\S]*?<\/head[^>]*>/gi, " ")
-    // Preserve visual line breaks before stripTags collapses every tag to a space:
-    // <br> and block-closing tags become newlines, so an HTML-bodied report (e.g. a
-    // Huntress alert) keeps its section/line structure instead of flattening into
-    // one paragraph. Mirrors the conversion extractSelectionItems already does.
-    .replace(/<\s*br\s*\/?>/gi, "\n")
-    .replace(/<\/(?:p|div|li|tr|h[1-6]|table|thead|tbody|section|article|blockquote)\s*>/gi, "\n");
-  return decodeEntities(stripTags(stripped))
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/[ \t]{2,}/g, " ")
-    .trim();
-}
-
-/** Extract the `<td>Label:</td><td>Value</td>` pairs from the report table. */
-function parseReport(html: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  if (!html) return out;
-  const re = /<td[^>]*>\s*([^<:]+?)\s*:\s*<\/td>\s*<td[^>]*>\s*([\s\S]*?)\s*<\/td>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(html)) !== null) {
-    const label = m[1]!.trim().toLowerCase();
-    const value = decodeEntities(stripTags(m[2]!)).trim();
-    if (label && value && !(label in out)) out[label] = value;
-  }
-  return out;
-}
-
-const EMAIL_RE = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
-
-/** The reporter email: the labeled report field first, else the first non-catch-all address. */
-function reportEmail(report: Record<string, string>, html: string): string {
-  const labeled = normalizeEmail(report.email ?? "");
-  if (labeled.includes("@") && labeled !== HALO_UNREGISTERED_EMAIL) return labeled;
-  for (const m of html.matchAll(EMAIL_RE)) {
-    const e = normalizeEmail(m[0]);
-    if (e && e !== HALO_UNREGISTERED_EMAIL) return e;
-  }
-  return "";
-}
-
-/** Pull the requester email out of the explicit fields Halo/Tier2 might use. */
-function requesterEmail(t: HaloTicket): string {
-  for (const k of ["emailfrom", "reportedby", "emailaddress", "email", "useremail", "contactemail"]) {
-    const v = normalizeEmail(str(t[k]));
-    if (v.includes("@")) return v;
-  }
-  return "";
-}
+// Report parsing (the HDB `<td>Label:</td><td>Value</td>` table) and the shared
+// HTML/text helpers live in the Helpdesk Buttons mapper (mappers/helpdeskButtons.ts)
+// and ingress/html.ts respectively — imported above.
 
 /** Map the asset ids Tier2 sends (our numeric surrogates) back to Gorelo agent UUIDs. */
 async function resolveAssetUuids(db: D1Database, t: HaloTicket): Promise<string[]> {
@@ -617,10 +538,11 @@ interface Routing {
 }
 
 async function resolveRouting(env: Env, t: HaloTicket, product: Product | null): Promise<Routing> {
-  const html = str(t.details_html) || str(t.details);
-  const report = parseReport(html);
-  const email = requesterEmail(t) || reportEmail(report, html);
-  const hostname = normalizeHost(report.hostname ?? "");
+  // Product-SPECIFIC parsing (report table, reporter email/hostname, emergency flag,
+  // submitter name) is delegated to the product's mapper. Everything below — the
+  // contact/device/client/location DB resolution — is generic and product-agnostic.
+  const parsed = mapperFor(product?.mapper).parse(t);
+  const { email, hostname, report } = parsed;
 
   // Contact: a real user_id first (the synthetic unregistered id resolves to
   // nothing), then the reporter email parsed from the report.
@@ -672,9 +594,9 @@ async function resolveRouting(env: Env, t: HaloTicket, product: Product | null):
   const agentDetail = device?.agent_id ? await new GoreloClient(env).getAgent(device.agent_id) : null;
 
   const contactName =
-    contact?.name || report.name || email || product?.ticketCreatedBy || "Helpdesk Buttons";
-  // A press flagged as an emergency bumps the ticket priority.
-  const isEmergency = /this is an emergency/i.test(html);
+    contact?.name || parsed.reporterName || email || product?.ticketCreatedBy || "Helpdesk Buttons";
+  // A press flagged as an emergency bumps the ticket priority (parsed per product).
+  const isEmergency = parsed.isEmergency;
 
   // Operational routing breadcrumb — no raw email or hostname (both PII: a hostname
   // can embed a username). Presence-only flags here; the values go behind DEBUG_LOGS.
@@ -703,275 +625,18 @@ async function resolveRouting(env: Env, t: HaloTicket, product: Product | null):
   };
 }
 
-const FIELD_MAX = 2000; // cap any single extra field so one value can't bloat the ticket
-const BODY_MAX = 16000; // generous cap on the whole report body — keep everything, guard only pathological blobs
-
-function truncate(s: string, max = FIELD_MAX): string {
-  return s.length > max ? `${s.slice(0, max)}… [truncated ${s.length - max} chars]` : s;
-}
-
-// Fields we already surface elsewhere (report body, device line, routing trail, or
-// dedicated handling), so they don't need to appear again in the raw-fields dump.
-const DUMP_SKIP = new Set([
-  "details_html",
-  "details",
-  "summary",
-  "subject",
-  "note_html",
-  "note",
-  "user_id",
-  "client_id",
-  "site_id",
-  "tickettype_id",
-  "assets",
-]);
-
-// Gorelo renders the ticket description as HTML (plain newlines collapse), so the
-// body is built as HTML: section headers, <br> line breaks, bulleted selections,
-// and clickable links. All text values are escaped before interpolation.
-const esc = (s: string): string =>
-  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-
-const heading = (title: string): string => `<b>${esc(title)}</b>`;
-
-// Bare http(s) URLs in a free-text body (e.g. Huntress's "Escalation:" link) arrive
-// as plain text, so Gorelo renders them unclickable. Match a URL run up to the first
-// whitespace/angle-bracket/quote and turn it into an <a>.
-const URL_RE = /https?:\/\/[^\s<>"']+/gi;
-
 /**
- * Escape `text` for HTML AND turn any bare http(s) URL into a clickable link. Escaping
- * and linkifying happen in one pass so URL and non-URL spans are each escaped exactly
- * once (escaping already-built anchor markup would break the href). Trailing sentence
- * punctuation is kept out of the href so "…/818208." links to "…/818208".
+ * Build the ticket description via the product's mapper. The mapper owns the body
+ * (report table vs free-text) + device section; the heading follows the product
+ * (Tier2 "Report Summary", Huntress "Details"), defaulting to "Report Summary" when
+ * no product matched — the historical default.
  */
-function linkify(text: string): string {
-  let out = "";
-  let last = 0;
-  for (const m of text.matchAll(URL_RE)) {
-    const url = m[0];
-    const start = m.index ?? 0;
-    out += esc(text.slice(last, start));
-    const trimmed = url.replace(/[.,;:!?)\]}'"]+$/, ""); // don't swallow trailing punctuation
-    const href = esc(trimmed);
-    out += `<a href="${href}">${href}</a>${esc(url.slice(trimmed.length))}`;
-    last = start + url.length;
-  }
-  out += esc(text.slice(last));
-  return out;
-}
-
-/** Ordered label/value pairs from the report table, original casing preserved. */
-function parseReportPairs(html: string): Array<{ label: string; value: string }> {
-  const out: Array<{ label: string; value: string }> = [];
-  const re = /<td[^>]*>\s*([^<:]+?)\s*:\s*<\/td>\s*<td[^>]*>\s*([\s\S]*?)\s*<\/td>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(html)) !== null) {
-    const label = m[1]!.trim();
-    const value = decodeEntities(stripTags(m[2]!)).replace(/\s+/g, " ").trim();
-    if (label && value) out.push({ label, value });
-  }
-  return out;
-}
-
-/** Split the Selections value cell into individual items (handles <br>/list markup). */
-function extractSelectionItems(html: string): string[] {
-  const m = /Selections\s*:?\s*<\/td>\s*<td[^>]*>([\s\S]*?)<\/td>/i.exec(html);
-  if (!m) return [];
-  return m[1]!
-    .replace(/<\s*br\s*\/?>/gi, "\n")
-    .replace(/<\/(?:p|div|li|tr)\s*>/gi, "\n")
-    .split("\n")
-    .map((s) => decodeEntities(stripTags(s)).replace(/\s+/g, " ").trim())
-    .filter(Boolean);
-}
-
-// Default HDB selections (every press has them) — removed as substrings so they go
-// whether the report lists them separately or concatenated into one string.
-const DEFAULT_SELECTION_RES = [
-  /connect directly to my computer as soon as (?:available|possible)/gi,
-  /this affects only me/gi,
-];
-function cleanSelection(item: string): string {
-  let out = item;
-  for (const re of DEFAULT_SELECTION_RES) out = out.replace(re, "");
-  return out.replace(/\s{2,}/g, " ").replace(/^[\s;,.·•-]+|[\s;,.·•-]+$/g, "").trim();
-}
-
-/** The non-default selections a user actually chose (empty if only defaults). */
-function chosenSelections(html: string, pairs: Array<{ label: string; value: string }>): string[] {
-  let items = extractSelectionItems(html);
-  if (!items.length) {
-    const pair = pairs.find((p) => p.label.toLowerCase() === "selections");
-    if (pair) items = [pair.value];
-  }
-  return items.map(cleanSelection).filter(Boolean);
-}
-
-const nonEmpty = (v: unknown): string => (v == null ? "" : String(v).trim());
-/** Join present parts with " · ", escaped. */
-function dot(parts: unknown[]): string {
-  return parts
-    .map(nonEmpty)
-    .filter(Boolean)
-    .map((s) => esc(s))
-    .join(" · ");
-}
-/** Offset (ms) of an IANA time zone from UTC at a given instant. */
-function tzOffsetMs(instant: number, tz: string): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: tz,
-    hourCycle: "h23",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).formatToParts(new Date(instant));
-  const f: Record<string, number> = {};
-  for (const p of parts) if (p.type !== "literal") f[p.type] = Number(p.value);
-  const asUtc = Date.UTC(f.year!, (f.month ?? 1) - 1, f.day!, f.hour ?? 0, f.minute ?? 0, f.second ?? 0);
-  return asUtc - instant;
-}
-
-/**
- * A Gorelo ISO timestamp as a coarse relative age, e.g. "13 hours ago", "7 days ago".
- * Gorelo sends timezone-naive timestamps that are wall-clock in the agent's `tz`; if a
- * tz is given we resolve the real instant through it, else we fall back to UTC.
- */
-function relativeTime(iso: string, tz?: string | null): string {
-  if (!iso) return "";
-  const hasTz = /[zZ]|[+-]\d\d:?\d\d$/.test(iso);
-  let t: number;
-  if (hasTz) {
-    t = Date.parse(iso);
-  } else {
-    const asUtc = Date.parse(`${iso}Z`); // wall time read as if UTC
-    if (!Number.isFinite(asUtc)) return "";
-    // Subtract the zone's offset at that wall time to get the true instant.
-    let offset = 0;
-    if (tz) {
-      try {
-        offset = tzOffsetMs(asUtc, tz);
-      } catch {
-        offset = 0; // unknown zone — treat as UTC
-      }
-    }
-    t = asUtc - offset;
-  }
-  if (!Number.isFinite(t)) return "";
-  const diff = Date.now() - t;
-  const suffix = diff >= 0 ? "ago" : "from now";
-  const mins = Math.round(Math.abs(diff) / 60000);
-  if (mins < 1) return "just now";
-  const units: Array<[number, string]> = [
-    [60, "minute"],
-    [24, "hour"],
-    [30, "day"],
-    [12, "month"],
-    [Number.POSITIVE_INFINITY, "year"],
-  ];
-  let value = mins;
-  for (const [factor, name] of units) {
-    if (value < factor) return `${value} ${name}${value === 1 ? "" : "s"} ${suffix}`;
-    value = Math.round(value / factor);
-  }
-  return `${value} years ${suffix}`;
-}
-
-/**
- * The "Device" section — rich hardware/OS detail from the live Gorelo agent record
- * (falling back to the mirror row). This is data HDB keeps behind its portal link.
- */
-function deviceSection(agent: PublicDeviceResponse | null, d: DeviceFullRow | null): string {
-  const name = nonEmpty(agent?.displayName) || nonEmpty(agent?.name) || nonEmpty(d?.display_name) || nonEmpty(d?.hostname);
-  const os = nonEmpty(agent?.osName) || nonEmpty(agent?.os) || nonEmpty(d?.os);
-  const serial = nonEmpty(agent?.serialNo) || nonEmpty(d?.serial);
-  const localIp = nonEmpty(agent?.localIPAddress) || nonEmpty(d?.local_ip);
-  const pubIp = nonEmpty(agent?.publicIPAddress) || nonEmpty(d?.public_ip);
-  if (!name && !serial && !localIp) return "";
-
-  const mem = nonEmpty(agent?.memory) ? `${nonEmpty(agent?.memory)} GB RAM` : "";
-  const model = dot([agent?.manufacturer, agent?.model]);
-  const lastUser = nonEmpty(agent?.lastLoggedOnUserUpn) || nonEmpty(agent?.lastLoggedOnUser);
-  const lastBoot = relativeTime(nonEmpty(agent?.lastBootUpTime), agent?.timeZone);
-
-  const lines = [
-    dot([name, os, agent?.osVersion]),
-    dot([model, agent?.hardwareArchitecture, agent?.cpu, mem]),
-    dot([serial ? `SN ${serial}` : "", localIp ? `Local IP ${localIp}` : "", pubIp ? `Public IP ${pubIp}` : ""]),
-    dot([lastUser ? `Last user ${lastUser}` : "", lastBoot ? `Last boot ${lastBoot}` : ""]),
-  ].filter(Boolean);
-  return lines.length ? `${heading("Device")}<br>${lines.join("<br>")}` : "";
-}
-
-/** Render Halo's `customfields` ([{name,value}, …]) as readable lines, not raw JSON. */
-function customFieldLines(v: unknown): string[] {
-  if (!Array.isArray(v)) return [];
-  const out: string[] = [];
-  for (const item of v) {
-    if (!item || typeof item !== "object") continue;
-    const o = item as Record<string, unknown>;
-    const name = nonEmpty(o.name ?? o.label ?? o.id);
-    if (!name) continue;
-    const value = o.value;
-    const rendered =
-      value == null || value === "" ? "" : typeof value === "object" ? JSON.stringify(value) : String(value);
-    out.push(`${esc(name)}: ${linkify(truncate(rendered))}`);
-  }
-  return out;
-}
-
-/** Any remaining top-level fields Tier2 sent (beyond what we surface elsewhere). */
-function extraFieldLines(t: HaloTicket): string[] {
-  const lines: string[] = [];
-  for (const [k, v] of Object.entries(t)) {
-    if (DUMP_SKIP.has(k) || v == null || v === "" || (Array.isArray(v) && v.length === 0)) continue;
-    // customfields is a [{name,value}] array — render each pair, not the JSON blob.
-    if (k === "customfields") {
-      const fields = customFieldLines(v);
-      if (fields.length) lines.push(...fields);
-      continue;
-    }
-    const rendered = typeof v === "object" ? JSON.stringify(v) : String(v);
-    lines.push(`${esc(k)}: ${linkify(truncate(rendered))}`);
-  }
-  return lines;
-}
-
-/** Build the ticket description as HTML: report + extra fields + device + routing. */
 function buildHaloDescription(t: HaloTicket, routing: Routing, product: Product | null): string {
-  const raw = str(t.details_html) || str(t.details) || str(t.summary);
-  const sections: string[] = [];
-
-  // Body section — one line per report field (non-default selections as bullets) for
-  // Tier2's HDB report, or the plain details for a product that sends free text. The
-  // heading follows the product (Tier2 "Report Summary", else e.g. "Details").
-  const pairs = parseReportPairs(raw);
-  const rows = pairs
-    .filter((p) => p.label.toLowerCase() !== "selections")
-    .map((p) => `${esc(p.label)}: ${linkify(truncate(p.value))}`);
-  const sels = chosenSelections(raw, pairs);
-  if (sels.length) {
-    rows.push(`Selections:<br>${sels.map((s) => `&nbsp;&bull; ${esc(s)}`).join("<br>")}`);
-  }
-  const report = rows.length
-    ? rows.join("<br>")
-    : linkify(truncate(htmlToText(raw), BODY_MAX)).replace(/\n/g, "<br>");
-  sections.push(`${heading(product?.ticketBodyHeading || "Report Summary")}<br>${report}`);
-
-  // Any other submitted fields (rarely present after trimming the routing ids).
-  const extras = extraFieldLines(t);
-  if (extras.length) sections.push(`${heading("Other fields")}<br>${extras.join("<br>")}`);
-
-  // Device hardware (rich detail from the live Gorelo agent record).
-  const dev = deviceSection(routing.agentDetail, routing.device);
-  if (dev) sections.push(dev);
-
-  // (Routing outcome — client/contact/location/asset — is logged, not shown in the
-  // ticket; the asset is already attached as a real Gorelo asset.)
-  return sections.join("<br><br>");
+  return mapperFor(product?.mapper).buildDescription(
+    t,
+    { agent: routing.agentDetail, device: routing.device },
+    product?.ticketBodyHeading || "Report Summary",
+  );
 }
 
 /**
@@ -1009,19 +674,21 @@ function originalTicketRef(original: CreatedTicketRow): string {
 }
 
 /**
- * Rewrite a build command into a Huntress-resolution notice: a clear banner naming
- * the original ticket (which the upstream Gorelo API can't close programmatically),
- * a "Resolved:" title, the resolved status, and no auto-email. Mutates `cmd`.
+ * Rewrite a build command into a Huntress-resolution FALLBACK notice — used only when
+ * handleResolution's primary path (directly updating the original ticket via PATCH)
+ * fails, so a resolution is never silently dropped: a clear banner naming the
+ * original ticket, a "Resolved:" title, the resolved status, and no auto-email.
+ * Mutates `cmd`.
  */
 function asResolutionNotice(env: Env, cmd: CreatePublicTicketCommand, original: CreatedTicketRow): void {
   const ref = originalTicketRef(original);
   const banner =
     `${heading("Huntress incident resolved")}<br>` +
     `Huntress marked this incident resolved and set the source ticket to its ` +
-    `post-resolution status.<br>` +
-    `Original ticket: ${esc(ref)}${original.title ? ` — ${esc(original.title)}` : ""}<br>` +
-    `The upstream ticket system has no update API, so the original ticket must be ` +
-    `closed manually.`;
+    `post-resolution status, but the relay could not update the original ticket ` +
+    `directly (see the Worker logs) — filing this notice instead so the ` +
+    `resolution isn't lost.<br>` +
+    `Original ticket: ${esc(ref)}${original.title ? ` — ${esc(original.title)}` : ""}`;
   cmd.title = original.title ? `Resolved: ${original.title}` : `Resolved: ${cmd.title}`;
   cmd.description = `${banner}<br><br>${cmd.description}`;
   cmd.statusId = resolvedStatusId(env);
@@ -1030,6 +697,14 @@ function asResolutionNotice(env: Env, cmd: CreatePublicTicketCommand, original: 
   // edit rarely carries routing fields, so without this it would fall to the catch-all.
   if (original.client_id) cmd.clientId = original.client_id;
   if (original.contact_id) cmd.contactId = original.contact_id;
+}
+
+/** The comment posted on the original Gorelo ticket when it's resolved directly (primary path). */
+function resolutionCommentHtml(): string {
+  return (
+    `${heading("Huntress incident resolved")}<br>` +
+    `Huntress marked this incident resolved and set the source ticket to its post-resolution status.`
+  );
 }
 
 /**
@@ -1203,7 +878,7 @@ async function handleCreateTicket(
   const editId = num(t.id) ?? num(t.ticket_id) ?? num(t.ticketid);
   if (editId != null) {
     const original = await getCreatedTicket(env.DB, editId);
-    if (original) return handleResolution(env, routing, cmd, original);
+    if (original) return handleResolution(env, ctx, routing, cmd, original, product);
   }
 
   // Eager create (deferCreate=false — Huntress AND now Tier2): the whole report is
@@ -1236,7 +911,29 @@ async function handleCreateTicket(
     }
     // The id we return: the real Gorelo number when resolved, else the surrogate.
     const returnedId = created && number?.number != null ? number.number : haloId;
-    if (created) await recordCreatedTicket(env, returnedId, goreloId, number, cmd);
+    if (created) {
+      await recordCreatedTicket(env, returnedId, goreloId, number, cmd);
+      // Notify egress sinks that a Gorelo ticket was created. A no-op (identical
+      // behavior) when nothing is subscribed; a subscriber backgrounds its own I/O.
+      emitTicketCreated(
+        {
+          type: "ticket.created",
+          goreloId,
+          haloId: returnedId,
+          number: number?.number ?? null,
+          displayNumber: number?.displayNumber ?? null,
+          productKey: product.key,
+          clientId: routing.clientId,
+          locationId: routing.locationId,
+          contactId: routing.contactId,
+          deviceAssetIds: routing.agentAssetIds,
+          subject: cmd.title,
+          descriptionText: htmlToText(cmd.description ?? ""),
+          timestamp: nowIso(),
+        },
+        { env, ctx },
+      );
+    }
     return haloCreatedTicket(env, returnedId, cmd, t, routing, number);
   }
 
@@ -1263,38 +960,66 @@ async function handleCreateTicket(
 
 /**
  * A Huntress resolution edit of an existing ticket (POST /Tickets carrying a
- * ledger-known id). The Gorelo API can't update the original, so we file a labeled
- * resolution ticket in a resolved status, mark the original resolved in our ledger,
- * and echo the original id back as resolved so Huntress sees its edit succeed.
+ * ledger-known id). Resolves the original Gorelo ticket **directly** via
+ * `PATCH /v1/tickets/{id}` (added to the Gorelo API after this relay's original
+ * "create-only" assumption was written) and posts a resolution comment on it. Only
+ * if that fails (or no `gorelo_id` is on record) does it fall back to the old
+ * behavior — filing a clearly-labeled "Resolved: …" notice ticket — so a resolution
+ * is never silently dropped. Marks the original resolved in our ledger either way,
+ * and echoes the original id back as resolved so Huntress sees its edit succeed.
  */
 async function handleResolution(
   env: Env,
+  ctx: ExecutionContext | undefined,
   routing: Routing,
   cmd: CreatePublicTicketCommand,
   original: CreatedTicketRow,
+  product: Product | null,
 ): Promise<Response> {
-  asResolutionNotice(env, cmd, original);
-  const rid = cmd.statusId;
+  const rid = resolvedStatusId(env);
+  let resolvedDirectly = false;
 
-  // File the resolution notice in Gorelo (best-effort; on failure queue for retry so
-  // the orphan flush picks it up, same resilience as the normal create path).
-  const noticeId = assetNum(crypto.randomUUID()) || Date.now() % 1_000_000_000_000;
-  try {
-    const client = new GoreloClient(env);
-    const raw = await client.createTicket(cmd);
-    const goreloId = extractTicketNumber(raw) ?? "";
-    const number = await client.resolveTicketNumber(goreloId);
-    await recordCreatedTicket(env, number?.number ?? noticeId, goreloId, number, cmd);
-    breadcrumb(
-      `HALO resolution notice for original halo_id=${original.halo_id} filed as gorelo ${goreloId} ` +
-        `(${numberTag(number)} status=${rid})`,
-    );
-  } catch (err) {
-    await putPendingTicket(env.DB, noticeId, JSON.stringify(cmd), nowIso());
-    breadcrumb(
-      `HALO resolution notice create failed for original halo_id=${original.halo_id}, ` +
-        `queued for retry: ${describeError(err)}`,
-    );
+  if (original.gorelo_id) {
+    try {
+      const client = new GoreloClient(env);
+      await client.updateTicket(original.gorelo_id, { statusId: rid });
+      resolvedDirectly = true;
+      breadcrumb(
+        `HALO resolved gorelo ticket ${original.gorelo_id} directly (halo_id=${original.halo_id} status=${rid})`,
+      );
+      // The status change already landed; a failed comment isn't worth losing that over.
+      await client.addTicketComment(original.gorelo_id, resolutionCommentHtml()).catch((err) => {
+        breadcrumb(`HALO resolution comment failed gorelo_id=${original.gorelo_id}: ${describeError(err)}`);
+      });
+    } catch (err) {
+      breadcrumb(
+        `HALO direct resolution update failed for gorelo_id=${original.gorelo_id} halo_id=${original.halo_id}, ` +
+          `falling back to a labeled notice ticket: ${describeError(err)}`,
+      );
+    }
+  }
+
+  // Fallback (old behavior): no gorelo_id on record, or the direct update failed.
+  if (!resolvedDirectly) {
+    asResolutionNotice(env, cmd, original);
+    const noticeId = assetNum(crypto.randomUUID()) || Date.now() % 1_000_000_000_000;
+    try {
+      const client = new GoreloClient(env);
+      const raw = await client.createTicket(cmd);
+      const goreloId = extractTicketNumber(raw) ?? "";
+      const number = await client.resolveTicketNumber(goreloId);
+      await recordCreatedTicket(env, number?.number ?? noticeId, goreloId, number, cmd);
+      breadcrumb(
+        `HALO resolution notice for original halo_id=${original.halo_id} filed as gorelo ${goreloId} ` +
+          `(${numberTag(number)} status=${rid})`,
+      );
+    } catch (err) {
+      await putPendingTicket(env.DB, noticeId, JSON.stringify(cmd), nowIso());
+      breadcrumb(
+        `HALO resolution notice create failed for original halo_id=${original.halo_id}, ` +
+          `queued for retry: ${describeError(err)}`,
+      );
+    }
   }
 
   // Mark the original resolved in our ledger (upsert with the resolved status) so a
@@ -1304,6 +1029,28 @@ async function handleResolution(
   } catch (err) {
     breadcrumb(`HALO resolution ledger update failed halo_id=${original.halo_id}: ${describeError(err)}`);
   }
+
+  // Notify egress sinks that a ticket was resolved. No-op with no subscribers; a
+  // sink that mirrored this ticket looks up any sink-specific link from the ledger
+  // by original.haloId (no sink-specific field appears on the event).
+  emitTicketResolved(
+    {
+      type: "ticket.resolved",
+      original: {
+        haloId: original.halo_id,
+        goreloId: original.gorelo_id,
+        number: original.number,
+        displayNumber: original.display_number,
+        title: original.title,
+        clientId: original.client_id,
+        contactId: original.contact_id,
+      },
+      productKey: product?.key ?? null,
+      resolvedStatusId: rid,
+      timestamp: nowIso(),
+    },
+    { env, ctx },
+  );
 
   // Echo the edited (original) ticket back as resolved — Huntress edited THAT id, so
   // returning a new id would break its correlation.
@@ -1425,14 +1172,6 @@ async function handleActions(env: Env, ctx: ExecutionContext | undefined, body: 
     }
     throw err;
   }
-}
-
-/** Parse the configured notifly (Apprise) URLs — comma / whitespace / newline separated. */
-export function notiflyUrls(env: Env): string[] {
-  return (env.NOTIFLY_URLS ?? "")
-    .split(/[\s,]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
 }
 
 /**

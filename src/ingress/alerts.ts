@@ -1,9 +1,9 @@
-import { findDeviceFullByHostname, getAlert, initSchema, listClientRows, putAlert, recordHeartbeat } from "./db.js";
-import { GoreloClient, GoreloError } from "./gorelo.js";
-import { breadcrumb, debug, describeError } from "./log.js";
-import { normalizeHost } from "./parse.js";
+import { findDeviceFullByHostname, getAlert, initSchema, listClientRows, putAlert, recordHeartbeat } from "../core/db.js";
+import { GoreloClient, GoreloError } from "../core/gorelo.js";
+import { breadcrumb, debug, describeError } from "../core/log.js";
+import { normalizeHost } from "../core/parse.js";
 import { ipInCidr } from "./products.js";
-import type { AlertLevel, Env, PostAlertRequest } from "./types.js";
+import type { AlertLevel, Env, PostAlertRequest } from "../core/types.js";
 
 /**
  * Monitoring alert relay — POST /v1/alerts.

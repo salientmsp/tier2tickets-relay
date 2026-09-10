@@ -11,6 +11,7 @@
     "deploy": "wrangler deploy",
     "deploy:staging": "wrangler deploy --env staging",
     "typecheck": "tsc --noEmit",
+    "lint:boundaries": "node scripts/check-import-boundaries.mjs",
     "check:allowscripts": "node scripts/check-allowscripts.mjs",
     "check:configs": "node scripts/check-wrangler-configs.mjs",
     "test": "vitest run",
@@ -23,7 +24,7 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.22.0",
-    "@cloudflare/workers-types": "5.20260908.1",
+    "@cloudflare/workers-types": "5.20260910.1",
     "typescript": "7.0.2",
     "vitest": "4.1.11",
     "wrangler": "4.130.0"

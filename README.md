@@ -52,22 +52,33 @@ Cron (every 6h) / POST /admin/sync / first-call bootstrap ──▶ syncAll() de
 
 ## Project layout
 
+The source is split into **core** (shared), **ingress** (inbound: the Halo mock) and
+**egress** (outbound: fan-out sinks). The one rule: **ingress/ and egress/ never import
+each other** — both import core/, and they meet only through `core/events.ts` (wired in
+`index.ts`). A CI check (`npm run lint:boundaries`) fails the build on any crossing import.
+
 | Path | Purpose |
 |---|---|
-| `src/index.ts` | `fetch` + `scheduled` handlers, routing (admin/health/alerts/Halo) |
-| `src/halo.ts` | the HaloPSA mock — token, lookups, per-product create, report parsing |
-| `src/alerts.ts` | monitoring-alert ingress (`POST /v1/alerts`) — auth, dedup by `dedupe_key`, Gorelo mapping |
-| `src/products.ts` | product registry (`PRODUCTS`, IPs/CIDRs, `ENABLE_*`, UA gate, per-product OAuth creds, `matchProduct`, `haloCredentials`, `ipAllowed`) |
-| `src/haloShapes.ts` | full Halo config-item shapes (status/type/priority/team), field lists derived from the swagger |
-| `src/gorelo.ts` | Gorelo API client (retry/backoff, defensive parsing) |
-| `src/sync.ts` | `syncAll()` — rebuild the D1 mirror off the request path |
-| `src/db.ts` | D1 schema + point lookups (+ the deferred-ticket queue) |
-| `src/parse.ts` | small string normalizers (`normalizeHost`, `normalizeEmail`) |
-| `src/types.ts` | `Env` + hand-written subset of Gorelo API types |
+| `src/index.ts` | `fetch` + `scheduled` + `queue` handlers, routing (admin/health/alerts/Halo); Sentry wrap; registers egress subscribers with the event spine |
+| `src/core/events.ts` | the internal event spine — `TicketCreatedEvent`/`TicketResolvedEvent` + subscriber registry (the ingress→egress contract) |
+| `src/core/gorelo.ts` | Gorelo API client (retry/backoff, defensive parsing) |
+| `src/core/db.ts` | D1 schema + point lookups (+ the deferred-ticket queue + the Jira retry queue + the alert/heartbeat tables) |
+| `src/core/parse.ts` | small string normalizers (`normalizeHost`, `normalizeEmail`) |
+| `src/core/notify.ts` | `notiflyUrls` — parse the notifly alert URLs (shared by every dead-letter path) |
+| `src/core/log.ts` / `token.ts` / `types.ts` | logging chokepoint / signed bearer tokens / `Env` + Gorelo API types |
+| `src/ingress/halo.ts` | the HaloPSA mock — token, lookups, per-product create, resolution; emits ticket events |
+| `src/ingress/alerts.ts` | monitoring-alert ingress (`POST /v1/alerts`) — auth, dedup by `dedupe_key`, Gorelo mapping |
+| `src/ingress/html.ts` | shared product-agnostic HTML/text render + parse helpers |
+| `src/ingress/mappers/` | per-product `ProductMapper` seam (`helpdeskButtons` mapper — HDB report table + free-text) |
+| `src/ingress/products.ts` | product registry (`PRODUCTS`, IPs/CIDRs, `ENABLE_*`, UA gate, per-product OAuth creds + mapper) |
+| `src/ingress/haloShapes.ts` | full Halo config-item shapes (status/type/priority/team), from the swagger |
+| `src/ingress/sync.ts` | `syncAll()` — rebuild the D1 mirror off the request path |
+| `src/egress/jira/` | the Jira fan-out — a `TicketEventSubscriber` + dependency-free Jira Cloud client + `pending_jira` drain |
 | `docs/halo-swagger.v2.json` | the real HaloPSA OpenAPI spec — reference for shaping mock responses |
-| `migrations/0001_init.sql` | D1 schema (also self-created at runtime) |
+| `migrations/0001_init.sql` / `0002_jira_fanout.sql` | D1 schema (also self-created at runtime) |
 | `scripts/gorelo-ids.sh` | dump groups/types/statuses/clients to fill the vars |
-| `scripts/halo-cred.sh` / `.ps1` | generate a per-product Halo OAuth pair, push the secret via `wrangler secret put`, print the creds (Bash and PowerShell) |
+| `scripts/halo-cred.sh` / `.ps1` | generate a per-product Halo OAuth pair, push the secret, print the creds |
+| `scripts/check-import-boundaries.mjs` | the ingress↔egress boundary check (CI + `npm run lint:boundaries`) |
 | `test/` | vitest specs (`@cloudflare/vitest-pool-workers`) |
 
 ## Deploy
@@ -368,15 +379,18 @@ grace window later. Submitter name and body heading are product-aware (Huntress 
 
 **Huntress resolutions.** Huntress signals an incident resolution by **editing the
 original ticket** (a `POST /Tickets` carrying its `id`) to its configured *"Status after
-Huntress Resolution"*. Gorelo has **no ticket-update endpoint** (`POST`/`GET` only — no
-`PUT`/`PATCH`, no `/v1/tickets/{id}`), so the relay can't mutate the original Gorelo
-ticket. Instead, when an incoming `POST /tickets` carries an `id` that matches a row in
-the `created_tickets` ledger (a ticket **we** issued — a brand-new alert never does, so a
-real alert can't be misread as a resolution), the relay files a **clearly-labeled
-resolution notice** in Gorelo — a `Resolved: …` ticket that names the original and lands
-in `DEFAULT_RESOLVED_STATUS_ID` (falls back to `DEFAULT_STATUS_ID` when unset) — marks the
-original resolved in the ledger, and echoes the original id back as resolved. The original
-Gorelo ticket must still be **closed manually** (the notice says so), since the API can't.
+Huntress Resolution"*. When an incoming `POST /tickets` carries an `id` that matches a
+row in the `created_tickets` ledger (a ticket **we** issued — a brand-new alert never
+does, so a real alert can't be misread as a resolution), the relay **closes the original
+ticket directly**: `PATCH /v1/tickets/{id}` to `DEFAULT_RESOLVED_STATUS_ID` (falls back
+to `DEFAULT_STATUS_ID` when unset), then `POST /v1/tickets/{id}/comments` with a short
+resolution note — both added to the Gorelo API after this relay's original
+"create-only" assumption was written (confirmed live 2026-09-10; `GoreloClient.
+updateTicket`/`addTicketComment`). Marks the original resolved in the ledger and echoes
+the original id back as resolved. If the direct `PATCH` fails, or the ledger row somehow
+carries no `gorelo_id`, the relay falls back to the **old behavior** — filing a
+clearly-labeled `Resolved: …` notice ticket naming the original — so a resolution is
+never silently dropped.
 
 > **Note — Tier2 was previously a deferred two-step** (`/tickets` queued, `/actions`
 > folded the HDB "View Report" link in before creating). It's now eager so the
@@ -704,6 +718,107 @@ product's token can't authorize another's request. A product whose pair is **uns
 stays lenient (any creds accepted, no enforcement), so products can be onboarded /
 rolled out independently. Generate a pair and push its secret with
 `./scripts/halo-cred.sh <product>` (or `./scripts/halo-cred.ps1 <product>` on Windows).
+
+## Jira output (egress)
+
+An optional **egress** sink (`src/egress/jira/`) mirrors created tickets into a
+co-managed client's own **Jira Cloud** and closes the linked Jira issue when the ticket
+resolves. Gorelo stays the system of record; Jira is a mirror.
+
+It is a subscriber to the internal event spine (`core/events.ts`), not wired into the
+Halo path: when the relay creates a Gorelo ticket it emits a `TicketCreatedEvent`, and
+on a resolution a `TicketResolvedEvent`. The Jira module reacts only to those events —
+it has no knowledge of Halo, Huntress, or any ticket source; it knows only that a ticket
+event occurred for some Gorelo client, carrying a product key. A create failure is queued
+in `pending_jira` and retried by the `*/5` cron (`flushPendingJira`), with a ledger-key
+dedup guard and a notifly dead-letter after repeated failures. **A Jira problem never
+delays or fails the Halo response or the Gorelo create.**
+
+Enable it with two settings:
+
+```toml
+# wrangler.toml [vars] — master switch (default off)
+ENABLE_JIRA = "true"
+```
+
+```bash
+# secret — one entry per ENROLLED Gorelo client (a client with no entry is never sent)
+wrangler secret put JIRA_TARGETS
+```
+
+**Use a dedicated Atlassian [service account](https://support.atlassian.com/user-management/docs/understand-service-accounts/)
+for the credential in every entry below — never a real employee's personal login.**
+A service account has no password, isn't tied to anyone leaving, and doesn't count
+against the site's user-license seats. Create one in Atlassian Administration →
+Directory → Service accounts. Each `JIRA_TARGETS` entry picks **one** of two auth modes:
+
+- **`email` + `apiToken`** (Basic auth, simplest) — a token generated for the service
+  account at Atlassian Administration → Directory → Service accounts → the account →
+  Create credentials → API token (or at id.atlassian.com while logged in *as* the
+  service account).
+  ```json
+  [{"clientId":15567,"baseUrl":"https://acme.atlassian.net","projectKey":"SEC",
+    "issueType":"Task","email":"svc@acme.com","apiToken":"…","resolvedTransition":"Done"}]
+  ```
+- **`oauthClientId` + `oauthClientSecret`** (OAuth 2.0, machine-to-machine) — from the
+  same service account: Create credentials → OAuth 2.0 → select Jira scopes
+  (`read:jira-work` + `write:jira-work` cover create/comment/transition). No
+  redirect/consent step — `JiraClient` exchanges these via `client_credentials` at
+  `auth.atlassian.com`, caching the resulting bearer token per instance.
+  ```json
+  [{"clientId":15567,"baseUrl":"https://acme.atlassian.net","projectKey":"SEC",
+    "issueType":"Task","oauthClientId":"…","oauthClientSecret":"…","resolvedTransition":"Done"}]
+  ```
+
+`baseUrl` is required either way, but **neither mode calls it directly** — every
+request goes through `api.atlassian.com/ex/jira/{cloudId}/...`, with `cloudId`
+resolved once per `JiraClient` instance (`baseUrl` is only used to look it up: via
+the OAuth token's accessible-resources in `oauth` mode, or an unauthenticated
+`{baseUrl}/_edge/tenant_info` lookup in `basic` mode). This matters because
+Atlassian's own token-creation UI increasingly steers you toward **scoped** API
+tokens (pick specific scopes, same page as `oauthClientId`/`oauthClientSecret`
+above) — a scoped token returns a misleading "project doesn't exist or you don't
+have permission" error if called against the site directly, but works fine through
+the gateway. A classic (unscoped) token works through the gateway too, so `basic`
+mode always routes this way regardless of which kind of token you generated.
+
+### Testing against a free Jira Cloud site (no production Jira needed)
+
+1. Create a free Jira Cloud site at <https://www.atlassian.com/software/jira/free>
+   (`https://<you>.atlassian.net`) and a project (note its **project key**, e.g. `SEC`).
+2. Create a service account for the site (Atlassian Administration → Directory →
+   Service accounts), then a credential for it — an API token, or an OAuth 2.0
+   credential scoped to `read:jira-work`/`write:jira-work` (see above).
+3. Point `JIRA_TARGETS` at that site, keyed by a **Gorelo `clientId` you can trigger a
+   ticket for**: `baseUrl` = your site URL, `projectKey` = your project, the auth fields
+   from step 2, `issueType` = a type your project has (e.g. `Task`), `resolvedTransition`
+   = a transition name from your workflow (e.g. `Done`). Set `ENABLE_JIRA="true"`.
+4. Drive a ticket for that client (a Tier2 press / Huntress alert, or a create in `wrangler
+   dev`) → a Jira issue should appear, labelled with the product key + `gorelo-<number>`.
+   Resolve it (Huntress resolution edit) → the issue gets a resolution comment and, if the
+   `resolvedTransition` matches an available transition, moves to that status.
+
+The three Jira REST calls the fan-out makes, and their live-verification status —
+**both auth modes** have now been driven end to end against a real Jira Cloud site
+(create → resolve → comment + transition), not just the mocked test suite:
+
+| Call | Jira endpoint | Verified by tests | Live-verified |
+|---|---|---|---|
+| Create issue | `POST /rest/api/3/issue` (ADF description) | mocked (both auth modes) | ✅ Basic auth + ✅ OAuth 2.0 (2026-09-09/10) |
+| Add comment | `POST /rest/api/3/issue/{key}/comment` (ADF body) | mocked (both auth modes) | ✅ Basic auth + ✅ OAuth 2.0 (2026-09-09/10) |
+| Transition | `GET` + `POST /rest/api/3/issue/{key}/transitions` | mocked (both auth modes) | ✅ Basic auth + ✅ OAuth 2.0 (2026-09-09/10) |
+
+The Basic-auth run was repeated twice: once with a classic API token (`HD-2`), and
+once with a **scoped** API token generated for the same service account (`HD-5`) —
+the scoped token initially failed with a misleading permission error when called
+against the site directly, which is what led to routing `basic` mode through the
+`api.atlassian.com/ex/jira/{cloudId}` gateway too (see above); re-verified working
+end to end after that fix.
+
+The OAuth 2.0 run also confirmed the `client_credentials` exchange against
+`auth.atlassian.com` and the `cloudId` resolution via `accessible-resources` — the two
+steps unique to that mode — work against a real service account, not just the mocked
+`test/egress-jira.test.ts` → "service-account OAuth 2.0 auth mode" specs.
 
 ## Data store & refresh
 

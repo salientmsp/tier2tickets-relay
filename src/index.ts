@@ -1,12 +1,19 @@
 import * as Sentry from "@sentry/cloudflare";
 
-import { alertHealth, handleAlert } from "./alerts.js";
-import { getLastSync, getSyncMeta, initSchema, mirrorCounts, setSyncMeta } from "./db.js";
-import { GoreloClient } from "./gorelo.js";
-import { flushPendingTickets, handleHalo, isHaloRequest, postSyncFailure, testNotifly } from "./halo.js";
-import { breadcrumb, describeError } from "./log.js";
-import { reconcileClientLocations, syncAll } from "./sync.js";
-import type { Env, SyncLocationsMessage } from "./types.js";
+import { alertHealth, handleAlert } from "./ingress/alerts.js";
+import { getLastSync, getSyncMeta, initSchema, mirrorCounts, setSyncMeta } from "./core/db.js";
+import { GoreloClient } from "./core/gorelo.js";
+import { flushPendingTickets, handleHalo, isHaloRequest, postSyncFailure, testNotifly } from "./ingress/halo.js";
+import { breadcrumb, describeError } from "./core/log.js";
+import { reconcileClientLocations, syncAll } from "./ingress/sync.js";
+import { registerSubscriber } from "./core/events.js";
+import { flushPendingJira, jiraSubscriber } from "./egress/jira/index.js";
+import type { Env, SyncLocationsMessage } from "./core/types.js";
+
+// Wire egress sinks to the event spine. index.ts is the ONLY place ingress and egress
+// meet: ingress emits ticket events (core/events.ts), egress subscribes here. Neither
+// side imports the other (enforced by scripts/check-import-boundaries.mjs).
+registerSubscriber(jiraSubscriber);
 
 // The 6-hourly mirror-refresh cron (must match wrangler.toml [triggers].crons).
 // Any other cron firing is treated as the frequent orphaned-ticket flush.
@@ -135,6 +142,16 @@ const handler = {
           breadcrumb(`cron flush failed ${describeError(err)}`);
           Sentry.captureException(err, { tags: { entrypoint: "scheduled", job: "cron-flush" } });
         }),
+    );
+    // The same frequent cron also drains the egress Jira fan-out retry queue — an
+    // independent task so a Jira issue never blocks the ticket flush.
+    ctx.waitUntil(
+      initSchema(env.DB)
+        .then(() => flushPendingJira(env))
+        .then((n) => {
+          if (n > 0) breadcrumb(`cron flush processed ${n} pending Jira job(s)`);
+        })
+        .catch((err) => breadcrumb(`cron Jira flush failed ${describeError(err)}`)),
     );
   },
 

@@ -1,7 +1,7 @@
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index.js";
-import { initSchema } from "../src/db.js";
+import { initSchema } from "../src/core/db.js";
 
 const HOST = "https://relay.example.com";
 const SECRET = "alert-test-secret"; // matches vitest.config.ts ALERT_SHARED_SECRET

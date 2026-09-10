@@ -57,6 +57,24 @@ CREATE TABLE IF NOT EXISTS pending_tickets (
 );
 CREATE INDEX IF NOT EXISTS idx_pending_created ON pending_tickets (created_at);
 
+-- Ledger of tickets we've actually created in Gorelo, keyed by the Halo ticket id we
+-- handed back. Serves GET /api/Tickets/{id} (a client's post-create verify step) and
+-- doubles as a dedup record. Introduced after this file's first version but never
+-- migrated in — included here so a fresh DB gets it from migrations alone. This is the
+-- pre-Jira base shape; the `jira_issue_key` column is added by the Jira feature
+-- (migrations/0002_jira_fanout.sql and the runtime initSchema additive migration).
+CREATE TABLE IF NOT EXISTS created_tickets (
+  halo_id        INTEGER PRIMARY KEY,
+  gorelo_id      TEXT,
+  number         INTEGER,
+  display_number TEXT,
+  title          TEXT,
+  client_id      INTEGER,
+  contact_id     INTEGER,
+  status_id      INTEGER,
+  created_at     TEXT NOT NULL
+);
+
 -- Monitoring alerts (POST /v1/alerts -> Gorelo's native POST /v1/alerts/). One row per
 -- stable `dedupe_key`; `status` is our own 'open'|'resolved' lifecycle (Gorelo's alert
 -- API is create-only — no id/close), and `last_event_id` is the last processed

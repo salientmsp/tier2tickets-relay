@@ -133,6 +133,15 @@ SEND_TICKET_CREATED_EMAIL = "true"
 # contain PII/PHI (names, emails, phones) — only for short debugging windows.
 DEBUG_LOGS = "false"
 
+# Egress Jira fan-out for co-managed clients (src/egress/jira/). Master switch:
+# "true" mirrors each created ticket into the enrolled client's own Jira Cloud (in
+# addition to the Gorelo ticket) and closes that Jira issue when the ticket resolves.
+# "false" (default) disables it entirely. Which clients are enrolled is set per-client
+# in the JIRA_TARGETS secret — a client with no entry there is never sent to Jira even
+# when this is "true". The Gorelo ticket path is unchanged either way: a Jira failure
+# is queued for the */5 cron flush, never blocking a create.
+ENABLE_JIRA = "false"
+
 # Master on/off for the Sentry error monitor (src/index.ts). The integration is OFF
 # unless this is truthy ("true"/"1"/"yes"/"on") — off, Sentry sends nothing (no events,
 # no spans, no egress). Set "true" here to enable it for the deployed Worker; tests and
@@ -202,6 +211,7 @@ HALO_TOKEN_ENFORCE = "enforce"
 #   wrangler secret put ADMIN_KEY           # gates POST /admin/sync (X-Admin-Key / X-API-Key / Authorization: Bearer)
 #   wrangler secret put NOTIFLY_URLS        # optional: notifly (Apprise) URL(s) alerted when a ticket is dead-lettered
 #                                           #   e.g. "ntfy://alerts" | Teams Workflows "workflows://…&sig=…" — comma/space separated
+#   wrangler secret put JIRA_TARGETS        # optional: per-client Jira destinations for the egress Jira fan-out (with ENABLE_JIRA="true")
 #   wrangler secret put ALERT_SHARED_SECRET # `default` source secret for POST /v1/alerts (Bearer / X-Alert-Key)
 #   wrangler secret put ALERT_SECRET_<KEY>  # per-customer source secret (one per ALERT_SOURCES key, paired with ALERT_IPS_<KEY>)
 # Per-product Halo mock OAuth secrets (issue #51) — one client_secret per product,
@@ -252,7 +262,7 @@ name = "tier2tickets-relay-staging"
 # TODO(staging): the STAGING Cloudflare account id. Deploys fail loudly until it is set,
 # which is deliberate — without it, `--env staging` would publish into whichever tenant
 # you are currently logged into, i.e. production.
-account_id = "TODO_STAGING_CLOUDFLARE_ACCOUNT_ID"
+account_id = "c6452865d04ed5bd485084005c60cb02"
 
 [env.staging.observability.logs]
 enabled = true
@@ -290,6 +300,11 @@ ENFORCE_IP_ALLOWLIST = "true"
 
 ENABLE_TIER2 = "true"
 ENABLE_HUNTRESS = "true"
+
+# OFF for staging. Staging tenants are usually seeded from production, so a real client's
+# JIRA_TARGETS entry would mirror test tickets into their live Jira. Enable deliberately
+# (with a staging-only JIRA_TARGETS) only when exercising the fan-out end to end.
+ENABLE_JIRA = "false"
 
 # --- Gorelo IDs: TENANT-SPECIFIC, must be re-derived against the STAGING tenant -------
 # Run `GORELO_API_KEY=<staging key> ./scripts/gorelo-ids.sh` and paste the results.
@@ -335,5 +350,5 @@ binding = "DB"
 database_name = "tier2tickets-relay-staging"
 # TODO(staging): paste the id from `wrangler d1 create tier2tickets-relay-staging --env staging`.
 # The nil UUID until then, so a deploy fails rather than binding anything real.
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "a7c245d5-25c2-412c-9547-3bba704852ab"
 migrations_dir = "migrations"

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { PRODUCTS, ipAllowed, matchProduct } from "../src/products.js";
-import type { Env } from "../src/types.js";
+import { PRODUCTS, ipAllowed, matchProduct } from "../src/ingress/products.js";
+import type { Env } from "../src/core/types.js";
 
 const TIER2_IP = [...PRODUCTS.tier2!.ips][0]!;
 const HUNTRESS_IP = "52.4.130.244";

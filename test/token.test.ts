@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { signToken, verifyToken, verifyTokenResult } from "../src/token.js";
+import { signToken, verifyToken, verifyTokenResult } from "../src/core/token.js";
 
 const SECRET = "halo-test-secret";
 const now = (): number => Math.floor(Date.now() / 1000);
