@@ -82,13 +82,14 @@ DEFAULT_TYPE_ID = "7045"
 # statusId returns HTTP 400 (confirmed by testing), even though the swagger marks it nullable.
 DEFAULT_STATUS_ID = "1"
 
-# Status a Huntress-resolution notice lands in. Huntress signals a resolution by EDITING
-# the source ticket to its configured "Status after Huntress Resolution"; Gorelo has no
-# ticket-update API, so we file a labeled resolution ticket in this status instead (and
-# mark the original resolved in our ledger). Set to your Gorelo "Resolved"/"Closed" status
-# id (GET /v1/tickets/statuses). Unset -> falls back to DEFAULT_STATUS_ID (notice still
-# files, just not in a closed status).
-# DEFAULT_RESOLVED_STATUS_ID = "5"
+# Status a Huntress resolution moves the ORIGINAL Gorelo ticket to. Huntress signals a
+# resolution by EDITING the source ticket to its configured "Status after Huntress
+# Resolution"; the relay then PATCHes the original Gorelo ticket to this status and posts
+# a resolution comment (falling back to a labeled notice ticket in this status only if
+# the PATCH fails). GET /v1/tickets/statuses -> 3 "Solved", 4 "Closed". Unset -> falls
+# back to DEFAULT_STATUS_ID = 1 "New", which makes every resolution a silent no-op: the
+# comment lands but the ticket never leaves New (that was the case until 2026-09-14).
+DEFAULT_RESOLVED_STATUS_ID = "3"
 
 # PublicTicketPriority enum = [0,1,2,3,4]. Ships WITHOUT labels in the spec.
 # TODO(verify): confirm which int is your desired default priority in the Gorelo UI. 2 = a middle default.
@@ -319,6 +320,7 @@ FALLBACK_TAG_ID = "0"        # TODO(staging): "Submitted via API" tag id
 # Fixed Gorelo enums / universal ids — NOT tenant-specific, so these carry over as-is.
 # PublicTicketPriority = [0..4]; TicketSource = [1..6] (6 = API/integration); status 1 = New.
 DEFAULT_STATUS_ID = "1"
+DEFAULT_RESOLVED_STATUS_ID = "4"   # 4 = Closed (built-in; the default for non-prod — prod uses 3 Solved)
 DEFAULT_PRIORITY = "2"
 DEFAULT_SOURCE = "6"
 EMERGENCY_PRIORITY = "1"

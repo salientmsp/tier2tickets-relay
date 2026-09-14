@@ -1079,10 +1079,14 @@ live spec changes.
   `POST /ticket/public`) — a create without it returns HTTP 400, so `DEFAULT_STATUS_ID`
   (default `1` = New) is always sent. `contactId` is optional and left null when no
   client contact matches.
-- **`DEFAULT_RESOLVED_STATUS_ID`** (optional) — the status a Huntress **resolution
-  notice** lands in (see "Huntress resolutions" above); set it to your Gorelo
-  "Resolved"/"Closed" status id (`GET /v1/tickets/statuses`). Unset → falls back to
-  `DEFAULT_STATUS_ID`.
+- **`DEFAULT_RESOLVED_STATUS_ID`** — the status a Huntress **resolution** moves the
+  original ticket to (see "Huntress resolutions" above); set it to your Gorelo
+  "Solved"/"Closed" status id (`GET /v1/tickets/statuses` → `3` Solved, `4` Closed —
+  built-in statuses, same ids on every tenant). Production uses `3` Solved; the dev and
+  staging configs default to `4` Closed. **Leave it unset and
+  every resolution is a silent no-op**: the fallback is `DEFAULT_STATUS_ID` (= `1` New),
+  so the PATCH "succeeds", the resolution comment lands, and the ticket never leaves
+  New — exactly what happened in production until 2026-09-14.
 - **`DEFAULT_PRIORITY`** — the spec ships `PublicTicketPriority=[0..4]` as a bare int
   enum with no labels and no list endpoint; read the label off the Gorelo ticket UI.
   `DEFAULT_SOURCE=6` is the API/integration source (confirmed accepted).
