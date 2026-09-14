@@ -281,10 +281,39 @@ function listEnvelope(url: URL, extra: Record<string, unknown>): Record<string, 
   };
 }
 
-/** Grab the search term Tier2 sent (Halo uses `search`; also accept an email-ish param). */
+/**
+ * Pull the value out of Halo's `advanced_search` filter list. Tier2 resolves the
+ * requester with `advanced_search=[{"filter_name":"emailaddress","filter_type":2,
+ * "filter_value":"<email>"}]` (then retries with `email2` / `email3`) rather than
+ * `?search=`. Before this was unwrapped, the whole JSON array fell through the
+ * "any param containing @" fallback below and became the lookup term, so every
+ * requester lookup — the catch-all included — returned zero users and Tier2 showed
+ * "<email> is not a registered user". Returns "" when the param is absent or not a
+ * filter list with a string `filter_value`.
+ */
+function advancedSearchValue(url: URL): string {
+  const raw = url.searchParams.get("advanced_search");
+  if (!raw) return "";
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    const filters = Array.isArray(parsed) ? parsed : [parsed];
+    for (const f of filters) {
+      if (f && typeof f === "object" && typeof (f as { filter_value?: unknown }).filter_value === "string") {
+        return (f as { filter_value: string }).filter_value;
+      }
+    }
+  } catch {
+    /* not JSON — fall through */
+  }
+  return "";
+}
+
+/** Grab the search term Tier2 sent (`search`, Halo's `advanced_search` filter, or an email-ish param). */
 function searchTerm(url: URL): string {
   const s = url.searchParams.get("search");
   if (s) return s;
+  const adv = advancedSearchValue(url);
+  if (adv) return adv;
   for (const [, v] of url.searchParams.entries()) if (v.includes("@")) return v;
   return "";
 }

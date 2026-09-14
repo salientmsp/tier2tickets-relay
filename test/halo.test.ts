@@ -406,6 +406,53 @@ describe("Halo routing to real Tier2 paths (no /api prefix)", () => {
     const j = (await res.json()) as { users: Array<Record<string, unknown>> };
     expect(j.users[0]).toMatchObject({ id: 999999999, client_id: 999 });
   });
+
+  // Tier2 does NOT send `?search=`: it resolves the requester with Halo's
+  // `advanced_search` filter list (emailaddress, then email2, then email3). Captured
+  // from a live press 2026-09-14; the whole JSON array used to become the lookup term.
+  const advanced = (field: string, email: string) =>
+    `/users?advanced_search=${encodeURIComponent(
+      JSON.stringify([{ filter_name: field, filter_type: 2, filter_value: email }]),
+    )}`;
+
+  it("GET /users with Tier2's advanced_search emailaddress filter resolves a contact", async () => {
+    const res = await req(advanced("emailaddress", "user@corp.com"));
+    expect(res.status).toBe(200);
+    const j = (await res.json()) as { record_count: number; users: Array<Record<string, unknown>> };
+    expect(j.record_count).toBe(1);
+    expect(j.users[0]).toMatchObject({ id: 55, client_id: 10 });
+  });
+
+  it("GET /users advanced_search for the unregistered catch-all maps to the catch-all user", async () => {
+    const res = await req(advanced("emailaddress", "unregistered@helpdeskbuttons.com"));
+    expect(res.status).toBe(200);
+    const j = (await res.json()) as { record_count: number; users: Array<Record<string, unknown>> };
+    expect(j.record_count).toBe(1);
+    expect(j.users[0]).toMatchObject({ id: 999999999, client_id: 999 });
+  });
+
+  it("GET /users advanced_search email2/email3 retries resolve by the same address", async () => {
+    for (const field of ["email2", "email3"]) {
+      const res = await req(advanced(field, "unregistered@helpdeskbuttons.com"));
+      const j = (await res.json()) as { record_count: number };
+      expect(j.record_count).toBe(1);
+    }
+  });
+
+  it("GET /users advanced_search for an unknown address returns zero users, not an error", async () => {
+    const res = await req(advanced("emailaddress", "nobody@example.com"));
+    expect(res.status).toBe(200);
+    const j = (await res.json()) as { record_count: number; users: unknown[] };
+    expect(j.record_count).toBe(0);
+    expect(j.users).toEqual([]);
+  });
+
+  it("GET /users with a malformed advanced_search falls back to the email-ish param scan", async () => {
+    const res = await req("/users?advanced_search=not-json&email=user@corp.com");
+    expect(res.status).toBe(200);
+    const j = (await res.json()) as { users: Array<Record<string, unknown>> };
+    expect(j.users[0]).toMatchObject({ id: 55 });
+  });
 });
 
 describe("Halo lookups (Gorelo-backed)", () => {

@@ -349,7 +349,7 @@ list endpoints use the `*_View` **paging envelope** (`page_no`/`page_size`/`reco
 | Halo call | Worker response |
 |---|---|
 | `POST /token` (client_credentials) | validates the **matched product's** `client_id`/`client_secret` (if set — tier2 via `HALO_CLIENT_ID/SECRET`, Huntress via `HALO_CLIENT_ID_HUNTRESS/SECRET`) and returns a bearer token — a signed HMAC token bound to that product when creds are set, else an opaque one. Enforcement on the endpoints below is governed by `HALO_TOKEN_ENFORCE` (see [Security](#security)) |
-| `GET /users?search={email}` | the Gorelo **contact** (id/name/email/client/site) in the `Users_View` envelope; the `unregistered@helpdeskbuttons.com` catch-all maps to `CATCHALL_CLIENT_ID` |
+| `GET /users?search={email}` or `?advanced_search=[{"filter_name":"emailaddress","filter_value":{email}}]` | the Gorelo **contact** (id/name/email/client/site) in the `Users_View` envelope; the `unregistered@helpdeskbuttons.com` catch-all maps to `CATCHALL_CLIENT_ID`. Tier2 sends the `advanced_search` form (trying `emailaddress`, then `email2`, `email3`); the `filter_value` is unwrapped and looked up the same way |
 | `GET /client` / `GET /site` | Gorelo **clients** / **locations** from the mirror (`Area_View` / `Site_View` envelope) |
 | `GET /client/{id}` | a **single** Halo `Area` object (not the list envelope) — name from the mirror, synthesized for an unmirrored id (e.g. the catch-all) |
 | `GET /asset?search={hostname}` | the Gorelo **agent/device** (numeric surrogate id ↔ agent UUID) in the `Device_View` envelope |
