@@ -230,10 +230,74 @@ describe("Jira egress — subscriber wiring on create", () => {
     expect(fields.summary).toBe("Printer down");
     expect(fields.project).toEqual({ key: "SEC" });
     expect(fields.labels).toEqual(["tier2", "gorelo-555001"]);
+    // No requestType configured → the JSM Request Type field is not sent at all (a
+    // plain software project would reject an unknown custom field).
+    expect(fields).not.toHaveProperty("customfield_10010");
 
     // The issue key is recorded on the ledger (for the later close + dedup).
     const row = await getCreatedTicket(env.DB, haloId);
     expect(row?.jira_issue_key).toBe("SEC-1");
+  });
+
+  it("stamps a JSM request type on the create when the target sets one", async () => {
+    // A Jira Service Management target: the request type goes out as the bare id
+    // under the site's Request Type custom field (default customfield_10010) — the
+    // shape confirmed live against a real JSM site (2026-09-14). Without it a
+    // REST-created issue has no request type and project automation keyed on
+    // "request type equals …" ignores it.
+    (env as { JIRA_TARGETS?: string }).JIRA_TARGETS = JSON.stringify([
+      {
+        clientId: 10,
+        baseUrl: `https://${JIRA_HOST}`,
+        projectKey: "HD",
+        issueType: "[System] Service request",
+        requestType: "379",
+        email: "svc@acme.com",
+        apiToken: "tok",
+        resolvedTransition: "Addressed",
+      },
+    ]);
+    captureGoreloCreate({ number: 555002, displayNumber: "T-555002" });
+    const jira = captureJiraCreate("HD-5486");
+
+    const created = await req(
+      "/tickets",
+      tier2Init([{ summary: "Security alert", details_html: reportHtml("user@corp.com", "pc-01") }]),
+    );
+    expect(created.status).toBe(201);
+
+    expect(jira.calls()).toHaveLength(1);
+    const fields = (jira.calls()[0] as { fields: Record<string, unknown> }).fields;
+    expect(fields.project).toEqual({ key: "HD" });
+    expect(fields.issuetype).toEqual({ name: "[System] Service request" });
+    expect(fields.customfield_10010).toBe("379");
+  });
+
+  it("honours a custom requestTypeField id for sites where Request Type isn't customfield_10010", async () => {
+    (env as { JIRA_TARGETS?: string }).JIRA_TARGETS = JSON.stringify([
+      {
+        clientId: 10,
+        baseUrl: `https://${JIRA_HOST}`,
+        projectKey: "HD",
+        issueType: "[System] Service request",
+        requestType: "379",
+        requestTypeField: "customfield_10555",
+        email: "svc@acme.com",
+        apiToken: "tok",
+      },
+    ]);
+    captureGoreloCreate({ number: 555003, displayNumber: "T-555003" });
+    const jira = captureJiraCreate("HD-5487");
+
+    const created = await req(
+      "/tickets",
+      tier2Init([{ summary: "Security alert", details_html: reportHtml("user@corp.com", "pc-01") }]),
+    );
+    expect(created.status).toBe(201);
+
+    const fields = (jira.calls()[0] as { fields: Record<string, unknown> }).fields;
+    expect(fields.customfield_10555).toBe("379");
+    expect(fields).not.toHaveProperty("customfield_10010");
   });
 
   it("does NOT fan out when the client isn't enrolled", async () => {
@@ -390,6 +454,7 @@ describe("Jira egress — service-account OAuth 2.0 auth mode", () => {
     baseUrl: `https://${JIRA_HOST}`,
     projectKey: "SEC",
     issueType: "Task",
+    requestTypeField: "customfield_10010",
     resolvedTransition: "Done",
     auth: { mode: "oauth", oauthClientId: "oauth-id", oauthClientSecret: "oauth-secret" },
   };

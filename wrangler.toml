@@ -136,11 +136,11 @@ DEBUG_LOGS = "false"
 # Egress Jira fan-out for co-managed clients (src/egress/jira/). Master switch:
 # "true" mirrors each created ticket into the enrolled client's own Jira Cloud (in
 # addition to the Gorelo ticket) and closes that Jira issue when the ticket resolves.
-# "false" (default) disables it entirely. Which clients are enrolled is set per-client
+# "false" disables it entirely (prod: ON — the first co-managed JSM tenant is enrolled). Which clients are enrolled is set per-client
 # in the JIRA_TARGETS secret — a client with no entry there is never sent to Jira even
 # when this is "true". The Gorelo ticket path is unchanged either way: a Jira failure
 # is queued for the */5 cron flush, never blocking a create.
-ENABLE_JIRA = "false"
+ENABLE_JIRA = "true"
 
 # Master on/off for the Sentry error monitor (src/index.ts). The integration is OFF
 # unless this is truthy ("true"/"1"/"yes"/"on") — off, Sentry sends nothing (no events,

@@ -72,3 +72,11 @@ HALO_CLIENT_SECRET="halo-mock-client-secret"
 # cover create/comment/transition). Uses client_credentials against auth.atlassian.com,
 # so JiraClient calls api.atlassian.com/ex/jira/{cloudId} instead of the site directly.
 # JIRA_TARGETS='[{"clientId":15567,"baseUrl":"https://acme.atlassian.net","projectKey":"SEC","issueType":"Task","oauthClientId":"your-oauth-client-id","oauthClientSecret":"your-oauth-client-secret","resolvedTransition":"Done"}]'
+#
+# Jira Service Management project: also set "requestType" to the request type's numeric
+# id (as a string — the number in its settings URL, .../request-type/379/...) and make
+# "issueType" the issue type that request type is built on (e.g. "[System] Service
+# request"). Without it a REST-created issue has no request type and any project
+# automation keyed on "request type equals ..." ignores it. Sent under customfield_10010;
+# set "requestTypeField" only if your site's Request Type field has a different id.
+# JIRA_TARGETS='[{"clientId":15567,"baseUrl":"https://acme.atlassian.net","projectKey":"HD","issueType":"[System] Service request","requestType":"379","oauthClientId":"your-oauth-client-id","oauthClientSecret":"your-oauth-client-secret","resolvedTransition":"Addressed"}]'

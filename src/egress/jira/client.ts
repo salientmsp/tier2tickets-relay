@@ -59,6 +59,28 @@ export interface JiraTarget {
   /** Issue type name, e.g. "Task" / "Incident" (default "Task"). */
   issueType: string;
   /**
+   * Jira Service Management request type to stamp on the created issue, by its
+   * numeric id as a string (e.g. "379" — the number in the request type's settings
+   * URL, `.../settings/request-types/.../request-type/379/...`). Optional; plain
+   * software projects have no request types. In a JSM project an issue created via
+   * the REST API has NO request type unless this is set — it then shows as "No
+   * match" in the portal and, more importantly, any project automation keyed on
+   * "request type equals X" (e.g. one that moves new security requests into a
+   * triage status) skips it. Confirmed live 2026-09-14: the bare id is what the
+   * field accepts; "PROJ/379"-style keys are rejected as "Invalid customer request
+   * value". The request type must belong to `issueType` (a mismatch is accepted
+   * by the API but the automation still won't act on it).
+   */
+  requestType?: string;
+  /**
+   * The custom field id the Request Type lives under on the site (default
+   * "customfield_10010", which is what Jira Cloud assigns on nearly every site).
+   * Only consulted when `requestType` is set. Find yours with
+   * `GET /rest/api/3/issue/createmeta/{project}/issuetypes/{id}` → fields named
+   * "Request Type".
+   */
+  requestTypeField: string;
+  /**
    * Transition NAME to move the issue to on a ticket resolution, e.g. "Done".
    * Matched case-insensitively against the issue's available transitions. Unset
    * skips the transition (a resolution comment is still added).
@@ -86,6 +108,9 @@ export function jiraEnabled(env: Env): boolean {
   const v = (env.ENABLE_JIRA ?? "").trim().toLowerCase();
   return v === "true" || v === "1" || v === "yes" || v === "on";
 }
+
+/** Where Jira Cloud puts the JSM "Request Type" field on (nearly) every site. */
+const DEFAULT_REQUEST_TYPE_FIELD = "customfield_10010";
 
 function strField(o: Record<string, unknown>, key: string): string {
   const v = o[key];
@@ -142,6 +167,8 @@ export function parseJiraTargets(env: Env): Map<number, JiraTarget> {
       baseUrl,
       projectKey,
       issueType: strField(o, "issueType") || "Task",
+      requestType: strField(o, "requestType") || undefined,
+      requestTypeField: strField(o, "requestTypeField") || DEFAULT_REQUEST_TYPE_FIELD,
       resolvedTransition: strField(o, "resolvedTransition") || undefined,
       auth,
     });
@@ -361,6 +388,10 @@ export class JiraClient {
         summary: input.summary.slice(0, 255), // Jira caps summary length
         description: adfDoc(input.description),
         ...(input.labels?.length ? { labels: input.labels } : {}),
+        // JSM request type (see JiraTarget.requestType) — sent as the bare id under
+        // the site's Request Type custom field; omitted entirely when not configured
+        // so a plain software project never sees an unknown field.
+        ...(this.target.requestType ? { [this.target.requestTypeField]: this.target.requestType } : {}),
       },
     };
     const res = await this.request("/rest/api/3/issue", {

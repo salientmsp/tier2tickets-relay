@@ -777,6 +777,30 @@ Directory → Service accounts. Each `JIRA_TARGETS` entry picks **one** of two a
     "issueType":"Task","oauthClientId":"…","oauthClientSecret":"…","resolvedTransition":"Done"}]
   ```
 
+**Jira Service Management projects** need one more field. A JSM issue created via the
+REST API carries **no request type** unless it's sent explicitly — it shows as "No
+match" in the portal and, more importantly, any project automation keyed on *request
+type equals …* (e.g. a rule that moves new security requests into a triage status)
+silently skips it. Add `requestType` with the request type's **numeric id as a
+string** — the number in its settings URL,
+`…/settings/request-types/…/request-type/379/…` — and make `issueType` the issue
+type that request type is built on (Project settings → Request types shows it; JSM's
+own are named like `[System] Service request`):
+
+```json
+[{"clientId":24520,"baseUrl":"https://acme.atlassian.net","projectKey":"HD",
+  "issueType":"[System] Service request","requestType":"379",
+  "oauthClientId":"…","oauthClientSecret":"…","resolvedTransition":"Addressed"}]
+```
+
+The id goes out as the bare string under the site's Request Type custom field
+(`customfield_10010` on virtually every Jira Cloud site; override with
+`requestTypeField` if `GET /rest/api/3/issue/createmeta/{project}/issuetypes/{id}`
+shows "Request Type" under a different id). Confirmed live 2026-09-14 — the
+`PROJ/379`-style key Atlassian's older docs describe is rejected as
+"Invalid customer request value", the bare id is accepted. Leave `requestType` out
+for a plain software project.
+
 `baseUrl` is required either way, but **neither mode calls it directly** — every
 request goes through `api.atlassian.com/ex/jira/{cloudId}/...`, with `cloudId`
 resolved once per `JiraClient` instance (`baseUrl` is only used to look it up: via

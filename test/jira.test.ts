@@ -38,6 +38,40 @@ describe("parseJiraTargets", () => {
     expect(t.issueType).toBe("Task"); // defaulted
     expect(t.resolvedTransition).toBe("Done");
     expect(t.auth).toEqual({ mode: "basic", email: "svc@acme.com", apiToken: "tok" });
+    // No JSM request type by default; the field id still defaults so a later
+    // requestType-only edit works without also naming the field.
+    expect(t.requestType).toBeUndefined();
+    expect(t.requestTypeField).toBe("customfield_10010");
+  });
+
+  it("carries an optional JSM requestType (bare id) and a requestTypeField override", () => {
+    const raw = JSON.stringify([
+      {
+        clientId: 40,
+        baseUrl: "https://acme.atlassian.net",
+        projectKey: "HD",
+        issueType: "[System] Service request",
+        requestType: 379, // a number is tolerated only as a string — see below
+        email: "e@x.com",
+        apiToken: "t",
+      },
+      {
+        clientId: 41,
+        baseUrl: "https://acme.atlassian.net",
+        projectKey: "HD",
+        issueType: "[System] Service request",
+        requestType: " 379 ",
+        requestTypeField: "customfield_10555",
+        email: "e@x.com",
+        apiToken: "t",
+      },
+    ]);
+    const m = parseJiraTargets(mkEnv({ JIRA_TARGETS: raw }));
+    // Every other config field is a string; a bare JSON number is ignored (treated
+    // as unset) rather than coerced, matching how the rest of the entry is read.
+    expect(m.get(40)!.requestType).toBeUndefined();
+    expect(m.get(41)!.requestType).toBe("379"); // trimmed
+    expect(m.get(41)!.requestTypeField).toBe("customfield_10555");
   });
 
   it("skips entries missing a required field but keeps the valid ones", () => {
