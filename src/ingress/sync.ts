@@ -67,16 +67,31 @@ interface ContactInsert {
  * (and a region that has not rolled the rename out yet).
  */
 function siteId(r: { locationId?: number | null; clientLocationId?: number | null }): number | null {
-  return r.locationId ?? r.clientLocationId ?? null;
+  return assignedId(r.locationId ?? r.clientLocationId);
+}
+
+/**
+ * A Gorelo client/site id, or null when unassigned.
+ *
+ * Before the 2026-10-02 API change, agents (and uptime checks) reported an unassigned
+ * ClientId/LocationId as -1; they now send null. The old sentinel passed the `== null`
+ * guards, so an unassigned agent was mirrored under client -1 and any ticket filed for
+ * it was raised against a client that does not exist. Treat any non-positive id as
+ * unassigned so the mirror is right in either shape (a region that has not rolled the
+ * change out yet, or a rollback).
+ */
+function assignedId(id: number | null | undefined): number | null {
+  return id != null && id > 0 ? id : null;
 }
 
 function toDeviceRows(agents: PublicDeviceResponse[]): DeviceInsert[] {
   const rows: DeviceInsert[] = [];
   for (const a of agents) {
-    if (a.clientId == null) continue; // can't route without a client
+    const clientId = assignedId(a.clientId);
+    if (clientId == null) continue; // can't route without a client
     rows.push({
       hostname: normalizeHost(a.displayName ?? a.name ?? ""),
-      clientId: a.clientId,
+      clientId,
       locationId: siteId(a),
       agentId: a.id,
       assetNum: assetNum(a.id),

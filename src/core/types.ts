@@ -148,8 +148,8 @@ export type PublicTicketPriority = 0 | 1 | 2 | 3 | 4;
 export type TicketSource = 1 | 2 | 3 | 4 | 5 | 6;
 
 /**
- * AlertLevel — Gorelo's alert severity enum, integers [1,2,3,4]. Confirmed against the
- * Gorelo alerts UI: 1 = Critical (2 = Error/High, 3 = Warning, 4 = Info/Low). The enum
+ * AlertLevel — Gorelo's alert severity enum, integers [1,2,3,4] (`AlertSeverity` in
+ * docs/gorelo-swagger.v1.json): 1 = Critical, 2 = Error, 3 = Warning, 4 = Information. The enum
  * is fixed (not tenant-customizable); the relay's severity->level mapping lives in
  * alertLevel() (src/alerts.ts).
  */
@@ -208,7 +208,7 @@ export interface CreatePublicTicketResult {
  * original "no update endpoint" assumption was written — see README "Huntress
  * resolutions"). A genuine partial update: only send the fields you want to change.
  * The relay only ever sets `statusId` (closing the original ticket on a resolution);
- * see `public-cluster_UpdatePublicTicketCommand` in docs/gorelo-swagger.v1.json for
+ * see `UpdateTicketCommand` in docs/gorelo-swagger.v1.json for
  * the full field set if more become needed.
  */
 export interface UpdatePublicTicketCommand {

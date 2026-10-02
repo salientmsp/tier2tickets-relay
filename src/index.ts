@@ -59,8 +59,10 @@ function sentryOptions(env: Env): Sentry.CloudflareOptions {
       httpHeaders: { request: false, response: false }, // no headers (auth, CF-Connecting-IP)
     },
     // Do not forward console/structured logs to Sentry — the same lines are the
-    // non-PII breadcrumbs of src/log.ts and belong only in Workers Logs.
-    enableLogs: false,
+    // non-PII breadcrumbs of src/log.ts and belong only in Workers Logs. v11 dropped
+    // the `enableLogs` switch (logs are captured whenever something emits one), so
+    // drop every log at the last hook instead.
+    beforeSendLog: () => null,
   };
 }
 

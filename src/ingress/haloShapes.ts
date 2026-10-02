@@ -92,6 +92,9 @@ export function haloTicketType(id: number, name: string): Record<string, unknown
     visible: true,
     webhook_id: "",
     _error: "",
+    address_field_type: 0,
+    allowed_roles_list: [],
+    show_details_at_top: false,
   };
 }
 
@@ -122,6 +125,8 @@ export function haloPriority(id: number, name: string): Record<string, unknown> 
     setfixtotargetdate: false,
     translations: [],
     enterslaresponseexcuse: false,
+    enterslaresponsebreachcode: false,
+    enterslaresolutionbreachcode: false,
     _warning: "",
     _isimport: false,
     _importtype: "",
@@ -164,5 +169,6 @@ export function haloTeam(id: number, name: string): Record<string, unknown> {
     mailbox_override: 0,
     hide_from_dropdowns: false,
     third_party_relational_id: "",
+    dontsendsurvey: false,
   };
 }

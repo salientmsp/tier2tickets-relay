@@ -233,6 +233,29 @@ describe("syncAll delta reconcile (inline tables + location fan-out)", () => {
     expect(dev?.location_id).toBeNull();
   });
 
+  // Before 2026-10-02 Gorelo reported an unassigned agent ClientId/LocationId as -1;
+  // it now sends null. Both shapes must mirror as "unassigned".
+  it("skips an agent with no client, whether Gorelo sends null or the legacy -1", async () => {
+    const id = data.agents[0]!.id;
+    for (const clientId of [null, -1]) {
+      data.agents[0] = { id, clientId, locationId: 100, displayName: "PC-01" };
+      await syncAll(makeQueue().env);
+      const dev = await env.DB.prepare(`SELECT 1 FROM devices WHERE agent_id = ?`).bind(id).first();
+      expect(dev).toBeNull();
+    }
+  });
+
+  it("leaves the site id NULL for the legacy -1 unassigned-location sentinel", async () => {
+    data.agents[0] = { id: data.agents[0]!.id, clientId: 10, locationId: -1, displayName: "PC-01" };
+    await syncAll(makeQueue().env);
+
+    const dev = await env.DB
+      .prepare(`SELECT location_id FROM devices WHERE agent_id = ?`)
+      .bind(data.agents[0]!.id)
+      .first<{ location_id: number | null }>();
+    expect(dev?.location_id).toBeNull();
+  });
+
   it("reports zero changes when nothing changed upstream (no wasted writes)", async () => {
     await syncAll(makeQueue().env);
     const r = await syncAll(makeQueue().env); // identical dataset, second run

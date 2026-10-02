@@ -23,7 +23,7 @@ jobs:
 
       - uses: actions/setup-node@v7.0.0
         with:
-          node-version: 26.8.2
+          node-version: 26.10.0
           cache: npm
 
       # Structural check — no dependencies needed, so run it before install to

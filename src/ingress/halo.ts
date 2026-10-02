@@ -671,8 +671,9 @@ function buildHaloDescription(t: HaloTicket, routing: Routing, product: Product 
 /**
  * Extract the report/remote links HDB embeds in the /actions note. HDB hosts the
  * full report (screenshots, diagnostic data) and the remote-connect session on its
- * own portal and only sends hyperlinks — Gorelo has no attachment API, so surfacing
- * these links in the ticket is how a tech reaches the screenshots/diag/remote.
+ * own portal and only sends hyperlinks, so surfacing these links in the comment body
+ * is how a tech reaches the screenshots/diag/remote. (Gorelo comment attachments must be
+ * files uploaded via POST /v1/attachments; external links belong in the body.)
  */
 function extractNoteLinks(html: string): Array<{ label: string; href: string }> {
   const out: Array<{ label: string; href: string }> = [];
@@ -1184,7 +1185,8 @@ async function handleActions(
   // the report already in the ticket, and its <head>/<style> flatten into noise,
   // so we don't dump it. But it carries the HDB portal hyperlinks (View Report =
   // screenshots/diagnostics, Connect to Computer = remote session); those we DO
-  // surface, since Gorelo has no attachment API and this is the only path to them.
+  // surface in the body (Gorelo attachments are uploaded files only, not links), since
+  // this is the only path to them.
   const cmd = JSON.parse(pending.command) as CreatePublicTicketCommand;
   // Keep the report link (screenshots/diag); drop the remote "Connect to Computer"
   // link — techs connect from Gorelo, and it just clutters the ticket.
