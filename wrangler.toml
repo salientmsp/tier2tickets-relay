@@ -63,10 +63,12 @@ ALERT_IPS_NYSPHI = "69.74.23.178, 47.21.134.136"
 # field handling before its requests produce correct Gorelo tickets.
 ENABLE_TIER2 = "true"
 ENABLE_HUNTRESS = "true"
-ENABLE_NERDIO = "false"
+ENABLE_NERDIO = "true"
 # Nerdio Manager for MSP source IPs (comma/space separated): the NMM App Service's
 # outbound addresses in YOUR Azure subscription (see src/ingress/products.ts "nerdio").
-NERDIO_IPS = ""
+# Salient's NMM: web-admin-portal-pkqq753oag7rw (Central US), from
+# `az webapp show ... --query possibleOutboundIpAddresses` on 2026-11-16 (32 addresses).
+NERDIO_IPS = "20.84.254.233,20.84.254.243,20.84.255.17,20.84.255.18,20.84.255.66,20.84.255.90,20.15.144.39,20.84.255.122,20.84.255.190,20.84.255.197,20.84.255.215,20.84.255.221,20.84.255.230,20.84.250.241,20.84.255.240,20.106.40.7,20.84.251.70,20.106.40.64,20.84.249.179,20.106.40.94,20.84.251.143,20.106.40.109,20.106.40.130,20.84.253.250,20.106.40.168,20.106.40.182,20.106.40.184,20.106.40.191,20.106.40.243,20.106.41.17,20.106.41.39,20.40.202.34"
 
 # --- Gorelo IDs: fill these from scripts/gorelo-ids.sh (values below are from the live Salient tenant) ---
 # groupId / typeId / priorityId / sourceId are NON-NULLABLE on CreatePublicTicketCommand
