@@ -113,6 +113,10 @@ describe("isHaloPath / haloResource", () => {
     expect(isHaloPath("/api/Users")).toBe(true);
     expect(isHaloPath("/auth/token")).toBe(true);
     expect(isHaloPath("/api/lookup")).toBe(true); // Nerdio reads /api/lookup?lookupid=27
+    // Any /api/* path is Halo-shaped, modelled or not (Nerdio also reads /api/category).
+    expect(isHaloPath("/api/category")).toBe(true);
+    expect(isHaloPath("/API/SomethingNew/12")).toBe(true);
+    expect(isHaloPath("/category")).toBe(false); // outside /api/, unknown resources stay non-Halo
     expect(isHaloPath("/health")).toBe(false);
     expect(isHaloPath("/admin/sync")).toBe(false);
   });
@@ -541,6 +545,12 @@ describe("Halo lookups (Gorelo-backed)", () => {
 
   it("GET /api/lookup returns an empty bare array (Nerdio's lookupid=27 probe)", async () => {
     const res = await req("/api/lookup?showallcodes=true&lookupid=27");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual([]);
+  });
+
+  it("GET on an unmodelled /api/* resource answers an empty list, not a 404", async () => {
+    const res = await req("/api/category?showall=true&type_id=1");
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual([]);
   });

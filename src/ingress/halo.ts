@@ -116,6 +116,13 @@ export function trailingId(pathname: string): number | null {
 
 /** Fallback path matcher (primary routing is the halo-app-name header). */
 export function isHaloPath(pathname: string): boolean {
+  // Every real Halo REST call lives under /api/, so any /api/* path is Halo-shaped
+  // even when its resource isn't one we model: it still goes through the IP/UA gate
+  // and token enforcement, and an unmodelled GET answers an empty list (handleConfig's
+  // default) instead of a bare 404. Halo-integrated vendors probe config endpoints
+  // they never document -- Nerdio's setup reads /api/lookup, /api/category, ... -- and
+  // abort on the first 404, so whitelisting them one at a time costs a deploy apiece.
+  if (/^\/api\//i.test(pathname)) return true;
   return pathname === "/auth/token" || HALO_RESOURCES.has(haloResource(pathname));
 }
 
