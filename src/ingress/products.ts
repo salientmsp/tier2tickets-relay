@@ -70,6 +70,12 @@ export interface Product {
   // catch-all FALLBACK_TAG_ID ("Submitted via API") so a newly onboarded product is never
   // left untagged before its own tag is wired up (see resolveTicketTagIds in halo.ts).
   tagVar?: keyof Env;
+
+  // When true, the Halo ticket's `urgency` field carries a Gorelo PriorityId and sets
+  // the created ticket's priority (when it is a valid id, 1-4). Nerdio maps its alert
+  // severities onto the priorities served at /api/lookup?lookupid=27 and sends the
+  // chosen one as `Urgency`. Products without it keep DEFAULT_PRIORITY.
+  urgencyIsPriority?: boolean;
 }
 
 /**
@@ -156,6 +162,9 @@ export const PRODUCTS: Record<string, Product> = {
     // Swap for a dedicated mapper if Nerdio's payload needs field-level handling.
     mapper: helpdeskButtonsMapper,
     tagVar: "NERDIO_TAG_ID",
+    // NMM sends its mapped severity as `Urgency` (a Gorelo priority id); see the
+    // severity lookup in halo.ts (observed 2026-11-16: "Urgency": 4 = Low).
+    urgencyIsPriority: true,
   },
 };
 

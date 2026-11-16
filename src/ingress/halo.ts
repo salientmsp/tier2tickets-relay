@@ -584,9 +584,23 @@ function handleConfig(env: Env, resource: string, url?: URL): Response {
 // --- Ticket create (POST /tickets) + note (POST /actions) -------------------
 
 function firstTicket(parsed: unknown): HaloTicket {
-  if (Array.isArray(parsed)) return (parsed[0] ?? {}) as HaloTicket;
-  if (parsed && typeof parsed === "object") return parsed as HaloTicket;
-  return {};
+  const t = Array.isArray(parsed) ? parsed[0] : parsed;
+  return t && typeof t === "object" ? lowerKeys(t as Record<string, unknown>) : {};
+}
+
+/**
+ * Lower-case an object's top-level keys. Halo's own field names are lower-case
+ * (`summary`, `details_html`, ...), but some clients send them PascalCase: Nerdio
+ * posts `Summary`, `Urgency`, `Impact`. Reading through this makes every field lookup
+ * case-insensitive. An already-lower-case key wins over a differently-cased duplicate.
+ */
+function lowerKeys(o: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(o)) {
+    const lk = k.toLowerCase();
+    if (!(lk in out) || k === lk) out[lk] = v;
+  }
+  return out;
 }
 
 function parseJson(body: string): unknown {
@@ -838,11 +852,16 @@ function commentAuthorName(product: Product | null): string {
 }
 
 /** The comment posted on the original Gorelo ticket when it's resolved directly (primary path). */
-function resolutionCommentHtml(): string {
-  return (
-    `${heading("Huntress incident resolved")}<br>` +
-    `Huntress marked this incident resolved and set the source ticket to its post-resolution status.`
-  );
+function resolutionCommentHtml(product: Product | null = null, note = ""): string {
+  if (!product || product.key === "huntress") {
+    return (
+      `${heading("Huntress incident resolved")}<br>` +
+      `Huntress marked this incident resolved and set the source ticket to its post-resolution status.`
+    );
+  }
+  const who = esc(product.label);
+  const extra = note ? `<br><br>${esc(htmlToText(note))}` : "";
+  return `${heading(`${who}: ticket resolved`)}<br>${who} marked this ticket resolved.${extra}`;
 }
 
 /**
@@ -869,7 +888,12 @@ function buildTicketCommand(
   const summary = str(t.summary) || str(t.subject) || "(no subject)";
   // "This is an emergency" bumps the priority (when EMERGENCY_PRIORITY is set).
   const emergencyId = num(env.EMERGENCY_PRIORITY);
-  const priorityId = (routing.isEmergency && emergencyId ? emergencyId : Number(env.DEFAULT_PRIORITY)) as PublicTicketPriority;
+  // A product that sends its severity as a Gorelo priority id in `urgency` (Nerdio)
+  // overrides the default; an emergency press still wins.
+  const urgency = product?.urgencyIsPriority ? num(t.urgency) : null;
+  const basePriority =
+    urgency != null && GORELO_PRIORITIES.some(([id]) => id === urgency) ? urgency : Number(env.DEFAULT_PRIORITY);
+  const priorityId = (routing.isEmergency && emergencyId ? emergencyId : basePriority) as PublicTicketPriority;
   return {
     title: summary,
     createdByName: routing.contactName,
@@ -914,7 +938,7 @@ function hasNumber(n: TicketNumber): n is { number: number | null; displayNumber
  * synthetic `id`. Deferred (Tier2) creates resolve the number at /actions instead.
  */
 function haloCreatedTicket(
-  env: Env,
+  _env: Env,
   haloId: number,
   cmd: CreatePublicTicketCommand,
   t: HaloTicket,
@@ -928,8 +952,8 @@ function haloCreatedTicket(
     client_id: routing.clientId,
     site_id: routing.locationId ?? 0,
     user_id: routing.contactId ?? 0,
-    tickettype_id: Number(env.DEFAULT_TYPE_ID),
-    status_id: Number(env.DEFAULT_STATUS_ID),
+    tickettype_id: cmd.typeId,
+    status_id: cmd.statusId,
   };
   if (hasNumber(number)) {
     body.gorelo_ticket_number = number.number;
@@ -1219,6 +1243,63 @@ function ticketNumberFromText(text: string): number | null {
  * ticket (explicit ticket id field, else the ticket number in the note text),
  * fold the note into the description, then create the Gorelo ticket.
  */
+/** Halo status ids served at /api/Status whose intent is "closed" (3 Resolved, 4 Closed). */
+const CLOSED_HALO_STATUSES = new Set([3, 4]);
+
+/**
+ * Resolve a ticket we created when the client closes it through /actions: PATCH the
+ * Gorelo ticket to `statusId`, post a resolution comment carrying the client's note,
+ * mark it resolved in the ledger and emit ticket.resolved. Best-effort: a failure is
+ * logged, never surfaced to the client (the action itself was received).
+ */
+async function resolveCreatedTicket(
+  env: Env,
+  ctx: ExecutionContext | undefined,
+  original: CreatedTicketRow,
+  product: Product | null,
+  statusId: number,
+  note: string,
+): Promise<void> {
+  const goreloId = original.gorelo_id;
+  if (!goreloId) return;
+  const client = new GoreloClient(env);
+  try {
+    await client.updateTicket(goreloId, { statusId });
+    breadcrumb(
+      `HALO action resolved gorelo ticket ${original.gorelo_id} (halo_id=${original.halo_id} status=${statusId} product=${product?.key ?? "none"})`,
+    );
+  } catch (err) {
+    breadcrumb(`HALO action resolve failed gorelo_id=${original.gorelo_id}: ${describeError(err)}`);
+    return;
+  }
+  await client
+    .addTicketComment(goreloId, resolutionCommentHtml(product, note), commentAuthorName(product))
+    .catch((err) => breadcrumb(`HALO resolution comment failed gorelo_id=${original.gorelo_id}: ${describeError(err)}`));
+  try {
+    await putCreatedTicket(env.DB, { ...original, status_id: statusId });
+  } catch (err) {
+    breadcrumb(`HALO resolution ledger update failed halo_id=${original.halo_id}: ${describeError(err)}`);
+  }
+  emitTicketResolved(
+    {
+      type: "ticket.resolved",
+      original: {
+        haloId: original.halo_id,
+        goreloId: original.gorelo_id,
+        number: original.number,
+        displayNumber: original.display_number,
+        title: original.title,
+        clientId: original.client_id,
+        contactId: original.contact_id,
+      },
+      productKey: product?.key ?? null,
+      resolvedStatusId: statusId,
+      timestamp: nowIso(),
+    },
+    { env, ctx },
+  );
+}
+
 async function handleActions(
   env: Env,
   ctx: ExecutionContext | undefined,
@@ -1231,9 +1312,12 @@ async function handleActions(
   );
 
   let haloId: number | null = null;
+  let newStatus: number | null = null;
   const noteParts: string[] = [];
-  for (const a of actions) {
+  for (const raw of actions) {
+    const a = lowerKeys(raw);
     haloId = haloId ?? num(a.ticket_id) ?? num(a.ticketid) ?? num(a.ticket) ?? num(a.request_id);
+    newStatus = newStatus ?? num(a.new_status) ?? num(a.status_id);
     const note = str(a.note_html) || str(a.note) || str(a.details_html) || str(a.details) || str(a.outcome);
     if (note) noteParts.push(note);
   }
@@ -1245,6 +1329,18 @@ async function handleActions(
   if (haloId == null) {
     breadcrumb("HALO action with no correlatable ticket id — accepted, nothing to attach");
     return jsonResponse(201, [{ id: actionId }]);
+  }
+
+  // A status change to one of the closed statuses we serve at /api/Status (3 Resolved,
+  // 4 Closed) on a ticket we created: resolve the Gorelo ticket. Nerdio closes its
+  // tickets this way (POST /actions { ticket_id, new_status: "3", note_html }).
+  if (newStatus != null && CLOSED_HALO_STATUSES.has(newStatus)) {
+    const original = await getCreatedTicket(env.DB, haloId);
+    if (original?.gorelo_id) {
+      await resolveCreatedTicket(env, ctx, original, product, newStatus === 4 ? 4 : resolvedStatusId(env), noteText);
+      return jsonResponse(201, [{ id: actionId, ticket_id: haloId }]);
+    }
+    breadcrumb(`HALO action halo_id=${haloId}: status ${newStatus} for a ticket not in the ledger — ignored`);
   }
 
   const pending = await takePendingTicket(env.DB, haloId);

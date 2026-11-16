@@ -1784,3 +1784,102 @@ describe("Halo eager create — matched Tier2 product", () => {
     expect(commentCalls).toBe(0);
   });
 });
+
+describe("Nerdio Manager for MSP (replayed live payloads, 2026-11-16)", () => {
+  const NERDIO_IP = "20.84.254.233";
+  const nerdioInit = (bodyObj: unknown): RequestInit => ({
+    method: "POST",
+    // NMM sends no User-Agent; it is matched on IP alone.
+    headers: { "content-type": "application/json; charset=utf-8", "CF-Connecting-IP": NERDIO_IP },
+    body: JSON.stringify(bodyObj),
+  });
+
+  async function withNerdio(fn: () => Promise<void>): Promise<void> {
+    const e = env as { ENABLE_NERDIO?: string; NERDIO_IPS?: string; ENFORCE_IP_ALLOWLIST?: string };
+    const prev = { ...e };
+    e.ENABLE_NERDIO = "true";
+    e.NERDIO_IPS = NERDIO_IP;
+    e.ENFORCE_IP_ALLOWLIST = "true";
+    try {
+      await fn();
+    } finally {
+      e.ENABLE_NERDIO = prev.ENABLE_NERDIO;
+      e.NERDIO_IPS = prev.NERDIO_IPS;
+      e.ENFORCE_IP_ALLOWLIST = prev.ENFORCE_IP_ALLOWLIST;
+    }
+  }
+
+  // The exact body NMM posted for its test ticket (client_id swapped to a seeded client).
+  const nerdioTicket = {
+    Summary: "Test ticket from Nerdio Manager for MSP",
+    details_html: "This is a test ticket from Nerdio Manager for MSP utilizing the Default Configuration ticket queue",
+    categoryid_1: 1,
+    Impact: 1,
+    Urgency: 4,
+    tickettype_id: 7046,
+    status_id: 1,
+    client_id: 10,
+  };
+
+  it("creates the ticket with Nerdio's PascalCase Summary, Urgency as priority, and its type", async () => {
+    await withNerdio(async () => {
+      routes.push({
+        method: "GET",
+        match: (u) => u.pathname === "/v1/tickets/types",
+        handler: () => json(200, envelope(pascal([{ id: 3, name: "Incident" }, { id: 7046, name: "Request" }]))),
+      });
+      const cap = captureGoreloCreate({ number: 8246, displayNumber: "8246" });
+      const res = await req("/api/tickets", nerdioInit([nerdioTicket]));
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body).toMatchObject({ id: 8246, summary: nerdioTicket.Summary, tickettype_id: 7046 });
+      expect(cap.posted()).toMatchObject({
+        title: nerdioTicket.Summary,
+        priorityId: 4, // Urgency 4 = Gorelo "Low"
+        typeId: 7046,
+      });
+      expect(String(cap.posted()!.description)).toContain("Default Configuration ticket queue");
+    });
+  });
+
+  it("ignores an Urgency that is not a Gorelo priority id", async () => {
+    await withNerdio(async () => {
+      const cap = captureGoreloCreate();
+      await req("/api/tickets", nerdioInit([{ ...nerdioTicket, Urgency: 9, tickettype_id: 3 }]));
+      expect(cap.posted()).toMatchObject({ priorityId: Number((env as { DEFAULT_PRIORITY: string }).DEFAULT_PRIORITY) });
+    });
+  });
+
+  it("resolves the Gorelo ticket when NMM closes it via /actions new_status 3", async () => {
+    await withNerdio(async () => {
+      const cap = captureGoreloCreate({ number: 8246, displayNumber: "8246" });
+      const update = captureGoreloUpdate();
+      const comment = captureGoreloComment();
+      await req("/api/tickets", nerdioInit([{ ...nerdioTicket, tickettype_id: 3 }]));
+      expect(cap.posted()).toBeDefined();
+
+      const res = await req(
+        "/api/actions",
+        nerdioInit([{ ticket_id: 8246, new_status: "3", note_html: "<p>Resolved</p>", Outcome: "Resolved" }]),
+      );
+      expect(res.status).toBe(201);
+      expect(update.calls()).toBe(1);
+      expect(update.patched()).toMatchObject({ statusId: 3 });
+      expect(String(comment.commented()!.body)).toContain("Nerdio Manager for MSP");
+      expect(String(comment.commented()!.body)).toContain("Resolved");
+      const row = await env.DB.prepare(`SELECT status_id FROM created_tickets WHERE halo_id = 8246`).first<{
+        status_id: number;
+      }>();
+      expect(row?.status_id).toBe(3);
+    });
+  });
+
+  it("does not touch Gorelo for a closing action on a ticket it never created", async () => {
+    await withNerdio(async () => {
+      const update = captureGoreloUpdate();
+      const res = await req("/api/actions", nerdioInit([{ ticket_id: 424242, new_status: "3", note_html: "x" }]));
+      expect(res.status).toBe(201);
+      expect(update.calls()).toBe(0);
+    });
+  });
+});
