@@ -76,6 +76,16 @@ export interface Product {
   // severities onto the priorities served at /api/lookup?lookupid=27 and sends the
   // chosen one as `Urgency`. Products without it keep DEFAULT_PRIORITY.
   urgencyIsPriority?: boolean;
+
+  // When true, the Halo ticket's `priority_id` carries a Gorelo PriorityId (the client
+  // picked it from /api/Priority, which serves Gorelo's priorities) and sets the
+  // created ticket's priority when valid (1-4). CIPP sends it this way.
+  priorityIdIsPriority?: boolean;
+
+  // When true, a POST /actions note on a ticket we created is posted to the Gorelo
+  // ticket as a comment (Private when `hiddenfromuser`), instead of being dropped.
+  // CIPP consolidates a repeat alert into its open ticket this way.
+  actionNotesAsComments?: boolean;
 }
 
 /**
@@ -165,6 +175,33 @@ export const PRODUCTS: Record<string, Product> = {
     // NMM sends its mapped severity as `Urgency` (a Gorelo priority id); see the
     // severity lookup in halo.ts (observed 2026-11-16: "Urgency": 4 = Low).
     urgencyIsPriority: true,
+  },
+  // CIPP (CyberDrain Improved Partner Portal) -- HaloPSA ticketing extension. Opt-in.
+  // Like Nerdio, its source IPs are per-deployment (a CIPP instance's Azure Function
+  // App outbound addresses), so they come from CIPP_IPS rather than this registry.
+  // Calls (per KelvinTegelaar/CIPP-API Modules/CippExtensions/Public/Halo):
+  //   POST /auth/token (client_credentials, scope=all), GET /api/Users?search=<email>,
+  //   GET /api/tickettype/{id} (default_sla gates priority_id), POST /api/Tickets,
+  //   and -- with "consolidate tickets" on -- GET /api/Tickets/{id} (hasbeenclosed)
+  //   then POST /api/actions { ticket_id, note_html, hiddenfromuser } for a repeat.
+  cipp: {
+    key: "cipp",
+    label: "CIPP",
+    enableVar: "ENABLE_CIPP",
+    defaultEnabled: false,
+    ips: new Set(),
+    cidrs: [],
+    ipsVar: "CIPP_IPS",
+    clientIdVar: "HALO_CLIENT_ID_CIPP",
+    clientSecretVar: "HALO_CLIENT_SECRET_CIPP",
+    deferCreate: false, // one-shot: the whole alert arrives in the create
+    ticketCreatedBy: "CIPP",
+    ticketBodyHeading: "Details",
+    apiAuthorName: "CIPP",
+    mapper: helpdeskButtonsMapper,
+    tagVar: "CIPP_TAG_ID",
+    priorityIdIsPriority: true,
+    actionNotesAsComments: true,
   },
 };
 

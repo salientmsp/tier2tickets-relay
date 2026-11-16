@@ -69,6 +69,9 @@ ENABLE_NERDIO = "true"
 # Salient's NMM: web-admin-portal-pkqq753oag7rw (Central US), from
 # `az webapp show ... --query possibleOutboundIpAddresses` on 2026-11-16 (32 addresses).
 NERDIO_IPS = "20.84.254.233,20.84.254.243,20.84.255.17,20.84.255.18,20.84.255.66,20.84.255.90,20.15.144.39,20.84.255.122,20.84.255.190,20.84.255.197,20.84.255.215,20.84.255.221,20.84.255.230,20.84.250.241,20.84.255.240,20.106.40.7,20.84.251.70,20.106.40.64,20.84.249.179,20.106.40.94,20.84.251.143,20.106.40.109,20.106.40.130,20.84.253.250,20.106.40.168,20.106.40.182,20.106.40.184,20.106.40.191,20.106.40.243,20.106.41.17,20.106.41.39,20.40.202.34"
+ENABLE_CIPP = "true"
+# Salient's CIPP (CyberDrain-hosted) outbound IPs, supplied 2026-11-16 (31 addresses).
+CIPP_IPS = "172.214.120.70,172.214.121.163,172.214.121.182,172.214.121.5,172.214.121.53,172.214.123.109,172.214.123.158,172.214.124.239,172.214.124.37,172.214.124.98,172.214.125.119,172.214.125.143,172.214.125.15,172.214.125.194,172.214.125.228,172.214.125.38,172.214.125.77,172.214.126.17,172.214.126.172,172.214.126.185,172.214.126.188,172.214.126.191,172.214.126.238,172.214.126.62,172.214.127.162,172.214.127.83,172.214.127.98,20.119.16.60,51.8.242.78,51.8.246.183,51.8.247.120"
 
 # --- Gorelo IDs: fill these from scripts/gorelo-ids.sh (values below are from the live Salient tenant) ---
 # groupId / typeId / priorityId / sourceId are NON-NULLABLE on CreatePublicTicketCommand
@@ -122,6 +125,8 @@ HDB_TAG_ID = "31974"
 HUNTRESS_TAG_ID = "32870"
 # 34732 "Submitted via Nerdio" — Nerdio Manager for MSP tickets.
 NERDIO_TAG_ID = "34732"
+# 38344 "Submitted via CIPP" — CIPP HaloPSA-extension tickets.
+CIPP_TAG_ID = "38344"
 # 32885 "Submitted via API" — catch-all applied when a ticket's product has no tag of its
 # own (a service onboarded before its dedicated tag is wired up, or a request that matched
 # no product). Ensures nothing is left untagged if we forget to add a per-service tag.
@@ -321,6 +326,10 @@ ENABLE_NERDIO = "false"
 # Nerdio Manager for MSP source IPs (comma/space separated): the NMM App Service's
 # outbound addresses in YOUR Azure subscription (see src/ingress/products.ts "nerdio").
 NERDIO_IPS = ""
+ENABLE_CIPP = "false"
+# CIPP source IPs (comma/space separated): your CIPP instance's Function App outbound
+# addresses (see src/ingress/products.ts "cipp").
+CIPP_IPS = ""
 
 # OFF for staging. Staging tenants are usually seeded from production, so a real client's
 # JIRA_TARGETS entry would mirror test tickets into their live Jira. Enable deliberately
@@ -336,6 +345,7 @@ CATCHALL_CLIENT_ID = "0"     # TODO(staging): fallback client id
 HDB_TAG_ID = "0"             # TODO(staging): "Submitted VIA HDB" tag id
 HUNTRESS_TAG_ID = "0"        # TODO(staging): "Submitted via Huntress" tag id
 NERDIO_TAG_ID = "0"          # TODO(staging): "Submitted via Nerdio" tag id
+CIPP_TAG_ID = "0"            # TODO(staging): "Submitted via CIPP" tag id
 FALLBACK_TAG_ID = "0"        # TODO(staging): "Submitted via API" tag id
 
 # Fixed Gorelo enums / universal ids — NOT tenant-specific, so these carry over as-is.

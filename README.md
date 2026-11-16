@@ -468,7 +468,7 @@ of the agent UUID (`asset_num`, stored in D1), mapped back on create.
 source that submitted it, for filtering/reporting. Each product carries its own tag —
 Helpdesk Buttons/Tier2 → `HDB_TAG_ID` (31974 "Submitted VIA HDB"), Huntress →
 `HUNTRESS_TAG_ID` (32870 "Submitted via Huntress"), Nerdio → `NERDIO_TAG_ID` (34732
-"Submitted via Nerdio"). A ticket whose product has no tag of
+"Submitted via Nerdio"), CIPP → `CIPP_TAG_ID` (38344 "Submitted via CIPP"). A ticket whose product has no tag of
 its own — a new service onboarded before its dedicated tag is wired up, or a request that
 matched no product — falls back to `FALLBACK_TAG_ID` (32885 "Submitted via API") so
 nothing is left untagged. These are tags, not the ticket type (`DEFAULT_TYPE_ID` stays
@@ -969,6 +969,17 @@ curl -X POST https://<your-worker-host>/admin/debug-error -H "X-Admin-Key: <ADMI
     possibleOutboundIpAddresses -o tsv`). Empty fails closed. NMM sends no `User-Agent`,
     so it is IP-only; its credentials are `HALO_CLIENT_ID_NERDIO`/`HALO_CLIENT_SECRET_NERDIO`
     (`./scripts/halo-cred.sh nerdio`).
+  - **CIPP** (its HaloPSA ticketing extension, `ENABLE_CIPP`) is likewise per-instance:
+    set `CIPP_IPS` to your CIPP instance's outbound addresses (for a CyberDrain-hosted
+    instance, capture them from a live request with `DEBUG_LOGS` on). IP-only; credentials
+    `HALO_CLIENT_ID_CIPP`/`HALO_CLIENT_SECRET_CIPP` (`./scripts/halo-cred.sh cipp`). In
+    CIPP set the Auth URL to `https://<relay>/auth`, the Resource URL to
+    `https://<relay>/api` and Tenant to `None`. The relay answers what CIPP calls:
+    `GET /api/TicketType/{id}` reports a non-zero `default_sla` so CIPP sends the
+    `priority_id` you pick (a Gorelo priority, 1-4), `userlookup.id` becomes the contact,
+    `GET /api/Tickets/{id}` carries `hasbeenclosed`, and with "consolidate tickets" on a
+    repeat alert's `POST /api/actions` note lands on the open Gorelo ticket as a comment
+    (Private when `hiddenfromuser`).
   - The whole allowlist is disabled **only** by an explicit, normalized
     `ENFORCE_IP_ALLOWLIST` of `false`, `0`, or empty; an unset var, `true`, or any
     other value enforces. An absent `CF-Connecting-IP` header also fails closed.
