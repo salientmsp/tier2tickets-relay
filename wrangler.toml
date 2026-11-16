@@ -132,7 +132,7 @@ SEND_TICKET_CREATED_EMAIL = "true"
 # Verbose logging toggle. "false" (default) logs only non-PII breadcrumbs (method/path/
 # status + resolved ids). Set "true" to log full HALO CAPTURE/RESPONSE bodies — which
 # contain PII/PHI (names, emails, phones) — only for short debugging windows.
-DEBUG_LOGS = "false"
+DEBUG_LOGS = "true"   # TEMP: Nerdio onboarding capture (issue #160) — revert to "false" after
 
 # Egress Jira fan-out for co-managed clients (src/egress/jira/). Master switch:
 # "true" mirrors each created ticket into the enrolled client's own Jira Cloud (in
