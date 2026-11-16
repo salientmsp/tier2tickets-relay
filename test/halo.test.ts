@@ -112,6 +112,7 @@ describe("isHaloPath / haloResource", () => {
     expect(isHaloPath("/tickets")).toBe(true);
     expect(isHaloPath("/api/Users")).toBe(true);
     expect(isHaloPath("/auth/token")).toBe(true);
+    expect(isHaloPath("/api/lookup")).toBe(true); // Nerdio reads /api/lookup?lookupid=27
     expect(isHaloPath("/health")).toBe(false);
     expect(isHaloPath("/admin/sync")).toBe(false);
   });
@@ -536,6 +537,12 @@ describe("Halo lookups (Gorelo-backed)", () => {
     expect(Object.keys(status[0]!).length).toBeGreaterThan(20);
     // A closed/resolved status must exist or a PSA editor's closed-side lookup crashes.
     expect(status.some((s) => s.type === 2 && /closed|resolved/i.test(String(s.name)))).toBe(true);
+  });
+
+  it("GET /api/lookup returns an empty bare array (Nerdio's lookupid=27 probe)", async () => {
+    const res = await req("/api/lookup?showallcodes=true&lookupid=27");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual([]);
   });
 
   it("GET /api/Team returns a full-shape bare array", async () => {
