@@ -8,6 +8,7 @@
 # Usage:
 #   ./scripts/halo-cred.sh tier2                 # -> HALO_CLIENT_ID / HALO_CLIENT_SECRET
 #   ./scripts/halo-cred.sh huntress              # -> HALO_CLIENT_ID_HUNTRESS / HALO_CLIENT_SECRET_HUNTRESS
+#   ./scripts/halo-cred.sh nerdio                # -> HALO_CLIENT_ID_NERDIO / HALO_CLIENT_SECRET_NERDIO
 #   CLIENT_ID=13b3832f... ./scripts/halo-cred.sh huntress   # reuse a client_id the product already fixes
 #   ./scripts/halo-cred.sh huntress --env staging          # extra args pass through to wrangler
 #   DRY_RUN=1 ./scripts/halo-cred.sh tier2       # print the values, don't call wrangler

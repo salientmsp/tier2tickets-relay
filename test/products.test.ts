@@ -157,3 +157,41 @@ describe("matchProduct — returns which product matched (for future routing)", 
     expect(matchProduct(reqFrom(undefined), BOTH)).toBeNull();
   });
 });
+
+describe("Nerdio (per-deployment NERDIO_IPS allowlist)", () => {
+  const NERDIO_IP = "20.84.254.233"; // observed NMM App Service egress (2026-11-16)
+  const nerdioEnv = (ips: string | undefined, enabled = "true"): Env =>
+    ({ ENFORCE_IP_ALLOWLIST: "true", ENABLE_NERDIO: enabled, NERDIO_IPS: ips }) as unknown as Env;
+
+  it("is off by default even with NERDIO_IPS set", () => {
+    const env = { ENFORCE_IP_ALLOWLIST: "true", NERDIO_IPS: NERDIO_IP } as unknown as Env;
+    expect(ipAllowed(reqFrom(NERDIO_IP), env)).toBe(false);
+  });
+
+  it("matches an exact IP from NERDIO_IPS with no User-Agent (NMM sends none)", () => {
+    const env = nerdioEnv(`1.2.3.4, ${NERDIO_IP}`);
+    expect(matchProduct(reqFrom(NERDIO_IP), env)?.key).toBe("nerdio");
+    expect(ipAllowed(reqFrom("1.2.3.4"), env)).toBe(true);
+    expect(ipAllowed(reqFrom("9.9.9.9"), env)).toBe(false);
+  });
+
+  it("accepts CIDRs and space/newline separators", () => {
+    const env = nerdioEnv("20.84.254.0/24\n  4.155.147.168");
+    expect(matchProduct(reqFrom("20.84.254.1"), env)?.key).toBe("nerdio");
+    expect(matchProduct(reqFrom("4.155.147.168"), env)?.key).toBe("nerdio");
+    expect(ipAllowed(reqFrom("20.84.255.1"), env)).toBe(false);
+  });
+
+  it("fails closed when NERDIO_IPS is empty or unset", () => {
+    expect(ipAllowed(reqFrom(NERDIO_IP), nerdioEnv(""))).toBe(false);
+    expect(ipAllowed(reqFrom(NERDIO_IP), nerdioEnv(undefined))).toBe(false);
+  });
+
+  it("is disabled by ENABLE_NERDIO=false", () => {
+    expect(ipAllowed(reqFrom(NERDIO_IP), nerdioEnv(NERDIO_IP, "false"))).toBe(false);
+  });
+
+  it("does not disturb tier2 matching", () => {
+    expect(matchProduct(reqFrom(TIER2_IP), nerdioEnv(NERDIO_IP))?.key).toBe("tier2");
+  });
+});

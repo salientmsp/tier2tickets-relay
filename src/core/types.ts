@@ -29,6 +29,11 @@ export interface Env {
   // default (tier2 on, huntress off — backward-compatible).
   ENABLE_TIER2?: string; // "true" | "false" (default true)
   ENABLE_HUNTRESS?: string; // "true" | "false" (default false)
+  ENABLE_NERDIO?: string; // "true" | "false" (default false)
+  // Nerdio's allowed source IPs/CIDRs (comma/space separated). Per-deployment: NMM
+  // runs in the MSP's own Azure subscription, so these are its App Service's
+  // outbound addresses. Empty => no Nerdio request can match.
+  NERDIO_IPS?: string;
   DEFAULT_GROUP_ID: string; // int as string
   DEFAULT_TYPE_ID: string; // int as string
   DEFAULT_STATUS_ID: string; // int as string (REQUIRED by Gorelo's validator)
@@ -47,6 +52,7 @@ export interface Env {
   // is left untagged. Each is a Gorelo tag id (int as string); unset skips that tag.
   HDB_TAG_ID?: string; // tag applied to Helpdesk Buttons tickets ("Submitted VIA HDB")
   HUNTRESS_TAG_ID?: string; // tag applied to Huntress tickets ("Submitted via Huntress")
+  NERDIO_TAG_ID?: string; // tag applied to Nerdio tickets (unset => FALLBACK_TAG_ID)
   // Catch-all tag applied when a ticket's product has no tag of its own (e.g. a service
   // onboarded before its dedicated tag is wired up) — "Submitted via API".
   FALLBACK_TAG_ID?: string;
@@ -127,6 +133,9 @@ export interface Env {
   // `wrangler secret put HALO_CLIENT_SECRET_HUNTRESS`.
   HALO_CLIENT_ID_HUNTRESS?: string;
   HALO_CLIENT_SECRET_HUNTRESS?: string;
+  // Nerdio's own OAuth pair. Set the secret via `wrangler secret put HALO_CLIENT_SECRET_NERDIO`.
+  HALO_CLIENT_ID_NERDIO?: string;
+  HALO_CLIENT_SECRET_NERDIO?: string;
   // Bearer-token enforcement on Halo resource endpoints (audit F1). Active per
   // request when the MATCHED product has a credential pair set. Values (default off):
   //   "off"     — no token check (identical to legacy behavior)

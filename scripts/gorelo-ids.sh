@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Dump the Gorelo IDs needed to fill wrangler.toml [vars]:
-#   groups, ticket types, ticket statuses, and clients (id / name / domains).
+#   ticket types, statuses, priorities and sources, and clients (id / name / domains).
 #
 # Usage:
 #   GORELO_API_KEY=xxxx ./scripts/gorelo-ids.sh
@@ -60,9 +60,11 @@ dump() {
   fi
 }
 
-# Handles a bare array or an { items | data | results | value: [...] } envelope.
-ROWS='(if type=="array" then . else (.items // .data // .results // .value // []) end) | .[] | "\(.id)\t\(.name)"'
-CLIENT_ROWS='(if type=="array" then . else (.items // .data // .results // .value // []) end) | .[] | "\(.id)\t\(.name)\tdomains=\([.domains[]? | (.domain // .name)] | join(","))"'
+# Handles a bare array or an { items | data | results | value: [...] } envelope, in
+# camelCase or PascalCase (Gorelo's responses moved to PascalCase in 2026-08).
+LIST='(if type=="array" then . else (.Data // .data // .items // .results // .value // []) end) | .[]'
+ROWS="${LIST}"' | "\(.Id // .id)\t\(.Name // .name)"'
+CLIENT_ROWS="${LIST}"' | "\(.Id // .id)\t\(.Name // .name)\tdomains=\([(.Domains // .domains)[]? | (.Domain // .domain // .Name // .name)] | join(","))"'
 
 # NOTE: DEFAULT_GROUP_ID is intentionally NOT fetched here. GET /v1/organization/groups
 # requires the 'Organization' scope, and the Worker never calls it at runtime — get the
@@ -76,12 +78,16 @@ echo "=== Ticket statuses  (GET /v1/tickets/statuses)  (optional) ==="
 dump /v1/tickets/statuses "${ROWS}"
 
 echo
-echo "=== Clients  (GET /v1/clients)  -> CATCHALL_CLIENT_ID + domain mirror ==="
-dump /v1/clients "${CLIENT_ROWS}"
+# Fixed scales, identical for every Gorelo account (per the spec), so these only
+# need reading once to confirm what the wrangler.toml integers mean.
+echo "=== Ticket priorities  (GET /v1/tickets/priorities)  -> DEFAULT_PRIORITY, EMERGENCY_PRIORITY ==="
+dump /v1/tickets/priorities "${ROWS}"
 
 echo
-echo "DEFAULT_PRIORITY / DEFAULT_SOURCE: the v1 spec ships PublicTicketPriority=[0..4]"
-echo "and TicketSource=[1..6] as bare int enums with NO labels, and exposes no list"
-echo "endpoint (nor a GET-ticket endpoint to read one back). Read the mapping off the"
-echo "New Ticket form in the Gorelo UI: the Priority (0..4) and Source (1..6) dropdown"
-echo "order gives the integer to use."
+echo "=== Ticket sources  (GET /v1/tickets/sources)  -> DEFAULT_SOURCE ==="
+echo "  (7 = Messenger is read-only: it appears on tickets but create/update reject it.)"
+dump /v1/tickets/sources "${ROWS}"
+
+echo
+echo "=== Clients  (GET /v1/clients)  -> CATCHALL_CLIENT_ID + domain mirror ==="
+dump /v1/clients "${CLIENT_ROWS}"

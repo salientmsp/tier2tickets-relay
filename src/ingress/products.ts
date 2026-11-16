@@ -16,6 +16,12 @@ export interface Product {
   defaultEnabled: boolean; // value when enableVar is unset/empty
   ips: Set<string>; // exact source IPs
   cidrs: string[]; // IPv4 CIDR ranges ("a.b.c.d/len")
+  // Optional Env var holding MORE allowed sources (exact IPs and/or IPv4 CIDRs,
+  // comma/space/newline separated), merged with `ips`/`cidrs`. For a product whose
+  // source addresses are specific to each deployment rather than global to the
+  // vendor -- e.g. Nerdio Manager for MSP, which runs in the MSP's OWN Azure
+  // subscription and so calls out from that App Service's outbound IPs.
+  ipsVar?: keyof Env;
   // Optional second gate: a case-insensitive substring the request's User-Agent
   // must contain. IP membership is ALWAYS required; when userAgent is set the UA
   // must ALSO match (IP AND UA). Left undefined => IP-only (no UA requirement).
@@ -124,6 +130,33 @@ export const PRODUCTS: Record<string, Product> = {
     mapper: helpdeskButtonsMapper,
     tagVar: "HUNTRESS_TAG_ID", // "Submitted via Huntress"
   },
+  // Nerdio Manager for MSP -- Halo PSA integration (issue #160). Opt-in (off by default).
+  // NMM is installed into the MSP's own Azure subscription as an App Service, so its
+  // source IPs are per-deployment: there are no vendor-wide IPs to hard-code here.
+  // Set NERDIO_IPS to that App Service's outbound addresses (Azure portal -> the NMM
+  // App Service -> Networking -> Outbound addresses, or
+  // `az webapp show ... --query possibleOutboundIpAddresses`). IP-only gate: NMM sends
+  // no User-Agent header at all (observed 2026-11-16), so there is nothing to match.
+  // Its /token call is client_credentials with scope "edit:tickets read:customers".
+  nerdio: {
+    key: "nerdio",
+    label: "Nerdio Manager for MSP",
+    enableVar: "ENABLE_NERDIO",
+    defaultEnabled: false,
+    ips: new Set(),
+    cidrs: [],
+    ipsVar: "NERDIO_IPS",
+    clientIdVar: "HALO_CLIENT_ID_NERDIO",
+    clientSecretVar: "HALO_CLIENT_SECRET_NERDIO",
+    deferCreate: false, // assumed one-shot like Huntress; revisit once a live ticket is captured
+    ticketCreatedBy: "Nerdio",
+    ticketBodyHeading: "Details",
+    apiAuthorName: "Nerdio",
+    // Provisional: the shared mapper's free-text branch renders any non-report body.
+    // Swap for a dedicated mapper if Nerdio's payload needs field-level handling.
+    mapper: helpdeskButtonsMapper,
+    tagVar: "NERDIO_TAG_ID",
+  },
 };
 
 /**
@@ -166,6 +199,27 @@ export function ipInCidr(ip: string, cidr: string): boolean {
   return (ipInt & mask) === (baseInt & mask);
 }
 
+/** Split an IP allowlist string into exact IPs and CIDR ranges (comma/space/newline separated). */
+export function parseAllowlist(raw: string | undefined): { ips: Set<string>; cidrs: string[] } {
+  const ips = new Set<string>();
+  const cidrs: string[] = [];
+  for (const entry of (raw ?? "").split(/[\s,]+/)) {
+    const e = entry.trim();
+    if (!e) continue;
+    if (e.includes("/")) cidrs.push(e);
+    else ips.add(e);
+  }
+  return { ips, cidrs };
+}
+
+/** True if `ip` is one of the product's sources: its built-in IPs/CIDRs plus any from `ipsVar`. */
+function productHasIp(p: Product, ip: string, env: Env): boolean {
+  if (p.ips.has(ip) || p.cidrs.some((c) => ipInCidr(ip, c))) return true;
+  if (!p.ipsVar) return false;
+  const extra = parseAllowlist(env[p.ipsVar] as string | undefined);
+  return extra.ips.has(ip) || extra.cidrs.some((c) => ipInCidr(ip, c));
+}
+
 /**
  * The currently-enabled products — those whose `ENABLE_*` flag resolves on. A
  * breadcrumb is logged when everything is disabled, since (with the allowlist
@@ -190,8 +244,7 @@ export function matchProduct(request: Request, env: Env): Product | null {
   if (!ip) return null;
   const ua = (request.headers.get("User-Agent") ?? "").toLowerCase();
   for (const p of enabledProducts(env)) {
-    const ipOk = p.ips.has(ip) || p.cidrs.some((c) => ipInCidr(ip, c));
-    if (!ipOk) continue; // IP membership is always mandatory
+    if (!productHasIp(p, ip, env)) continue; // IP membership is always mandatory
     if (p.userAgent && !ua.includes(p.userAgent.toLowerCase())) continue; // optional UA second gate
     return p;
   }
