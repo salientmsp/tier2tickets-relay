@@ -97,12 +97,13 @@ DEFAULT_STATUS_ID = "1"
 # comment lands but the ticket never leaves New (that was the case until 2026-09-14).
 DEFAULT_RESOLVED_STATUS_ID = "3"
 
-# PublicTicketPriority enum = [0,1,2,3,4]. Ships WITHOUT labels in the spec.
-# TODO(verify): confirm the label for 2 with GET /v1/tickets/priorities (scripts/gorelo-ids.sh). 2 = a middle default.
-DEFAULT_PRIORITY = "2"
+# GET /v1/tickets/priorities (fixed scale, same for every account; confirmed 2026-11-16):
+#   0 None, 1 Urgent, 2 High, 3 Normal, 4 Low.
+# 3 = Normal (was 2 = High until 2026-11-16, when the labels were confirmed).
+DEFAULT_PRIORITY = "3"
 
-# TicketSource enum = [1,2,3,4,5,6]. 6 = the API/integration source (Gorelo tags these with a
-# cog icon); confirmed accepted by the create endpoint.
+# GET /v1/tickets/sources: 1 Web, 2 Email, 3 Phone, 4 Chat, 5 Alert, 6 API, 7 Messenger
+# (read-only). 6 = API (Gorelo tags these with a cog icon).
 DEFAULT_SOURCE = "6"
 
 # Fallback client when no machine/domain match is found.
@@ -125,7 +126,7 @@ HUNTRESS_TAG_ID = "32870"
 FALLBACK_TAG_ID = "32885"
 
 # Priority id used when a press is flagged "This is an emergency" (else DEFAULT_PRIORITY).
-# PublicTicketPriority enum [0..4]; 1 is the top priority in the Gorelo UI ("Critical").
+# GET /v1/tickets/priorities: 1 = "Urgent", the top priority.
 # Unset to always use DEFAULT_PRIORITY.
 EMERGENCY_PRIORITY = "1"
 
@@ -333,7 +334,7 @@ FALLBACK_TAG_ID = "0"        # TODO(staging): "Submitted via API" tag id
 # PublicTicketPriority = [0..4]; TicketSource = [1..6] (6 = API/integration); status 1 = New.
 DEFAULT_STATUS_ID = "1"
 DEFAULT_RESOLVED_STATUS_ID = "4"   # 4 = Closed (built-in; the default for non-prod — prod uses 3 Solved)
-DEFAULT_PRIORITY = "2"
+DEFAULT_PRIORITY = "3"
 DEFAULT_SOURCE = "6"
 EMERGENCY_PRIORITY = "1"
 

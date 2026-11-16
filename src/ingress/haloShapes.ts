@@ -172,3 +172,31 @@ export function haloTeam(id: number, name: string): Record<string, unknown> {
     dontsendsurvey: false,
   };
 }
+
+/**
+ * A Halo `Lookup` item (GET /api/Lookup?lookupid=N): one option of a generic dropdown
+ * list. Only the identity fields carry meaning here; the rest are present-but-empty so
+ * a strict client deserializing the full model never meets an undefined field.
+ */
+export function haloLookup(id: number, lookupid: number, name: string, sequence: number): Record<string, unknown> {
+  return {
+    id,
+    lookupid,
+    name,
+    sequence,
+    intent: "",
+    originalvalue: name,
+    value2: "",
+    value3: "",
+    value4: "",
+    value5: "",
+    value6: "",
+    custom1: "",
+    custom2: "",
+    valueint1: 0,
+    valueint2: 0,
+    valuefloat1: 0,
+    inactive: false,
+    translations: [],
+  };
+}

@@ -25,7 +25,7 @@ import { breadcrumb, debug, debugOn, describeError } from "../core/log.js";
 import { normalizeEmail } from "../core/parse.js";
 import { assetNum, syncAll } from "./sync.js";
 import { haloCredentials, ipAllowed, matchProduct, type Product } from "./products.js";
-import { haloPriority, haloStatus, haloTeam, haloTicketType } from "./haloShapes.js";
+import { haloLookup, haloPriority, haloStatus, haloTeam, haloTicketType } from "./haloShapes.js";
 import { signToken, verifyTokenResult, type TokenPayload } from "../core/token.js";
 import { emitTicketCreated, emitTicketResolved } from "../core/events.js";
 import { notiflyUrls } from "../core/notify.js";
@@ -458,7 +458,26 @@ async function handleAsset(env: Env, url: URL): Promise<Response> {
  * field or filter the list to empty. These are picker options only — ticket
  * creation still uses the DEFAULT_* ids from wrangler.toml.
  */
-function handleConfig(env: Env, resource: string): Response {
+/**
+ * Gorelo's fixed ticket priority scale (GET /v1/tickets/priorities, identical for every
+ * account), minus 0 "None". The ids ARE Gorelo PriorityIds, so a vendor that maps its
+ * own severities onto these options hands the relay a Gorelo priority directly.
+ */
+const GORELO_PRIORITIES: ReadonlyArray<readonly [number, string]> = [
+  [1, "Urgent"],
+  [2, "High"],
+  [3, "Normal"],
+  [4, "Low"],
+];
+
+/**
+ * Halo lookup list that Nerdio Manager for MSP reads to fill its six "severity type"
+ * pickers (observed 2026-11-16). Answered with Gorelo's priorities so each Nerdio
+ * severity can be mapped onto one.
+ */
+const SEVERITY_LOOKUP_ID = 27;
+
+function handleConfig(env: Env, resource: string, url?: URL): Response {
   switch (resource) {
     case "tickettype":
     case "tickettypes":
@@ -480,20 +499,23 @@ function handleConfig(env: Env, resource: string): Response {
       return jsonResponse(200, [haloTeam(Number(env.DEFAULT_GROUP_ID), "Everyone")]);
     case "priority":
     case "priorities":
-      return jsonResponse(200, [
-        haloPriority(1, "Critical"),
-        haloPriority(2, "High"),
-        haloPriority(3, "Medium"),
-        haloPriority(4, "Low"),
-      ]);
+      return jsonResponse(200, GORELO_PRIORITIES.map(([id, name]) => haloPriority(id, name)));
     case "agent":
     case "agents":
       return jsonResponse(200, { agents: [], record_count: 0, page_no: 1, page_size: 100 });
-    case "lookup":
-      // Bare array of Lookup items, like Halo. Gorelo has no equivalent generic code
-      // tables, so every lookupid answers empty: a picker shows no options rather
-      // than the integration failing on a 404.
+    case "lookup": {
+      // Bare array of Lookup items, like Halo. Only the severity list has a Gorelo
+      // counterpart (priorities); every other lookupid answers empty, so a picker
+      // shows no options rather than the integration failing on a 404.
+      const lookupid = Number(url?.searchParams.get("lookupid") ?? "");
+      if (lookupid === SEVERITY_LOOKUP_ID) {
+        return jsonResponse(
+          200,
+          GORELO_PRIORITIES.map(([id, name], i) => haloLookup(id, SEVERITY_LOOKUP_ID, name, i + 1)),
+        );
+      }
       return jsonResponse(200, []);
+    }
     default:
       return jsonResponse(200, []);
   }
@@ -1452,7 +1474,7 @@ async function handleApi(
     }
     if (resource === "site" || resource === "sites") return handleSite(env, url);
     if (resource === "asset" || resource === "assets") return handleAsset(env, url);
-    return handleConfig(env, resource);
+    return handleConfig(env, resource, url);
   }
   return jsonResponse(200, []);
 }

@@ -543,10 +543,25 @@ describe("Halo lookups (Gorelo-backed)", () => {
     expect(status.some((s) => s.type === 2 && /closed|resolved/i.test(String(s.name)))).toBe(true);
   });
 
-  it("GET /api/lookup returns an empty bare array (Nerdio's lookupid=27 probe)", async () => {
+  it("GET /api/lookup?lookupid=27 lists Gorelo priorities for Nerdio's severity pickers", async () => {
     const res = await req("/api/lookup?showallcodes=true&lookupid=27");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual([]);
+    const j = (await res.json()) as Array<Record<string, unknown>>;
+    expect(j.map((o) => [o.id, o.name])).toEqual([
+      [1, "Urgent"],
+      [2, "High"],
+      [3, "Normal"],
+      [4, "Low"],
+    ]);
+    expect(j[0]).toMatchObject({ lookupid: 27, inactive: false });
+  });
+
+  it("GET /api/lookup for any other lookupid is an empty bare array", async () => {
+    for (const id of ["12", "1", ""]) {
+      const res = await req(`/api/lookup?showallcodes=true&lookupid=${id}`);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual([]);
+    }
   });
 
   it("GET on an unmodelled /api/* resource answers an empty list, not a 404", async () => {
