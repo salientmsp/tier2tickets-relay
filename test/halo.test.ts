@@ -2020,6 +2020,19 @@ describe("CIPP HaloPSA extension (payload shapes per CIPP-API Modules/CippExtens
     });
   });
 
+  it("keeps Halo control fields out of the ticket body", async () => {
+    await withCipp(async () => {
+      const cap = captureGoreloCreate();
+      await req("/api/Tickets", cippInit([{ ...cippTicket, source: 6, files: null }]));
+      const desc = String(cap.posted()!.description);
+      expect(desc).toContain("registered a new MFA method");
+      for (const k of ["Other fields", "usertype", "userlookup", "_forcereassign", "_novalidate",
+        "donotapplytemplateintheapi", "priority_id", "source:"]) {
+        expect(desc).not.toContain(k);
+      }
+    });
+  });
+
   it("ignores userlookup.id -1 (no matched user) and an out-of-range priority_id", async () => {
     await withCipp(async () => {
       const cap = captureGoreloCreate();

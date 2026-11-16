@@ -107,7 +107,7 @@ GORELO_API_KEY=xxxx ./scripts/gorelo-ids.sh
 #      HALO_TOKEN_ENFORCE (off|observe|enforce — see Security)
 
 # 4. Set secrets (never committed)
-wrangler secret put GORELO_API_KEY     # X-API-Key for Gorelo (ticket write + asset/contact/client read)
+wrangler secret put GORELO_API_KEY     # X-API-Key for Gorelo -- scopes below
 wrangler secret put ADMIN_KEY          # gates POST /admin/sync
 wrangler secret put ALERT_SHARED_SECRET # optional: gates POST /v1/alerts (Bearer / X-Alert-Key)
 # Per-product Halo mock OAuth secrets (issue #51) — one client_secret per product,
@@ -122,6 +122,21 @@ wrangler deploy
 # 6. Seed the D1 mirror (or wait for the first cron / first call to bootstrap it)
 curl -X POST https://<your-worker-host>/admin/sync -H "X-Admin-Key: <ADMIN_KEY>"
 ```
+
+**Gorelo API key scopes.** Gorelo keys carry per-area Read/Write/Delete scopes, and a
+call outside them answers 403. The relay needs (nothing else, and no Delete):
+
+| Scope | Read | Write | Used for |
+|---|---|---|---|
+| Organization | ✓ | | technician list (`/api/Agent`) |
+| Tickets | ✓ | ✓ | create, resolve, comment; types/statuses/priorities/sources/tags; number read-back |
+| Clients | ✓ | | client + location mirror |
+| Contacts | ✓ | | contact mirror, contact tags (VIP) |
+| Assets | ✓ | | device mirror, agent lookups |
+| Alerts | ✓ | ✓ | `/v1/alerts` ingress: raise, find, dismiss |
+
+Billing, Projects, Forms and Documents are unused.
+
 
 For local development, copy `.dev.vars.example` to `.dev.vars` (git-ignored) and
 run `npm run dev` (which uses `wrangler.dev.toml`, not the production config above).

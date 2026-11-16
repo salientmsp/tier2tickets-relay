@@ -234,13 +234,24 @@ export const DUMP_SKIP = new Set([
   "site_id",
   "tickettype_id",
   "assets",
+  // Halo request-shape controls and fields the relay already maps into the Gorelo
+  // ticket (priority, source): echoing them back as "Other fields" is noise.
+  "usertype",
+  "userlookup",
+  "donotapplytemplateintheapi",
+  "files",
+  "attachments",
+  "priority_id",
+  "urgency",
+  "source",
 ]);
 
 /** Any remaining top-level fields Tier2 sent (beyond what we surface elsewhere). */
 export function extraFieldLines(t: HaloTicket): string[] {
   const lines: string[] = [];
   for (const [k, v] of Object.entries(t)) {
-    if (DUMP_SKIP.has(k) || v == null || v === "" || (Array.isArray(v) && v.length === 0)) continue;
+    // Underscore-prefixed keys (_novalidate, _forcereassign, ...) are Halo API flags.
+    if (DUMP_SKIP.has(k) || k.startsWith("_") || v == null || v === "" || (Array.isArray(v) && v.length === 0)) continue;
     // customfields is a [{name,value}] array — render each pair, not the JSON blob.
     if (k === "customfields") {
       const fields = customFieldLines(v);

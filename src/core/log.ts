@@ -36,7 +36,12 @@ export function describeError(err: unknown): string {
   if (err instanceof GoreloError) {
     // Include the 6-digit Notifications code when Gorelo returned one — it is the
     // stable, non-PII failure identifier to triage on (see GoreloError.code).
-    return `GoreloError status=${err.status}${err.code ? ` code=${err.code}` : ""}`;
+    if (err.code) return `GoreloError status=${err.status} code=${err.code}`;
+    // No Gorelo envelope: the response came from something in front of the API (a
+    // gateway/WAF page, a proxy error), not from Gorelo's own handlers, so it carries
+    // no request data. A short, whitespace-collapsed excerpt says who refused it.
+    const excerpt = (err.body ?? "").replace(/\s+/g, " ").trim().slice(0, 160);
+    return `GoreloError status=${err.status}${excerpt ? ` body="${excerpt}"` : ""}`;
   }
   if (err instanceof Error) return `${err.name}: ${err.message}`;
   return String(err);
