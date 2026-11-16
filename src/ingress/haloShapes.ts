@@ -200,3 +200,32 @@ export function haloLookup(id: number, lookupid: number, name: string, sequence:
     translations: [],
   };
 }
+
+/**
+ * A Halo ticket `Category` (GET /api/Category). Gorelo has no ticket categories, so
+ * this only ever backs a single placeholder option a vendor's picker can select.
+ */
+export function haloCategory(id: number, name: string, typeId: number): Record<string, unknown> {
+  return {
+    id,
+    guid: "",
+    intent: "",
+    value: name,
+    category_name: name,
+    type_id: typeId,
+    sla_id: 0,
+    priority_id: 0,
+    chargerate: 0,
+    category_group_id: 0,
+    include_note: false,
+    note: "",
+    user_note: "",
+    itilrequesttype: 0,
+    is_integration: false,
+    translations: [],
+    allow_ai_suggestion: false,
+    level1: name,
+    level2: "",
+    level3: "",
+  };
+}

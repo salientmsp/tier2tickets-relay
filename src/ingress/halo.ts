@@ -25,7 +25,7 @@ import { breadcrumb, debug, debugOn, describeError } from "../core/log.js";
 import { normalizeEmail } from "../core/parse.js";
 import { assetNum, syncAll } from "./sync.js";
 import { haloCredentials, ipAllowed, matchProduct, type Product } from "./products.js";
-import { haloLookup, haloPriority, haloStatus, haloTeam, haloTicketType } from "./haloShapes.js";
+import { haloCategory, haloLookup, haloPriority, haloStatus, haloTeam, haloTicketType } from "./haloShapes.js";
 import { signToken, verifyTokenResult, type TokenPayload } from "../core/token.js";
 import { emitTicketCreated, emitTicketResolved } from "../core/events.js";
 import { notiflyUrls } from "../core/notify.js";
@@ -459,6 +459,47 @@ async function handleAsset(env: Env, url: URL): Promise<Response> {
  * creation still uses the DEFAULT_* ids from wrangler.toml.
  */
 /**
+ * GET /api/TicketType -- the Gorelo account's real ticket types, so a vendor's
+ * "ticket type" picker offers every type (not just DEFAULT_TYPE_ID) and can send one
+ * back on create (see resolveTypeId). The ids ARE Gorelo type ids. Falls back to the
+ * single default type if Gorelo can't be reached, so the picker never errors.
+ */
+async function handleTicketTypes(env: Env): Promise<Response> {
+  const fallback = [haloTicketType(Number(env.DEFAULT_TYPE_ID), "Incident")];
+  try {
+    const types = await new GoreloClient(env).listTicketTypes();
+    if (!types.length) return jsonResponse(200, fallback);
+    // Default type first: some clients preselect the first entry.
+    const def = Number(env.DEFAULT_TYPE_ID);
+    types.sort((a, b) => Number(b.id === def) - Number(a.id === def));
+    return jsonResponse(200, types.map((t) => haloTicketType(t.id, t.name)));
+  } catch (err) {
+    breadcrumb(`HALO tickettype list failed, serving default only ${describeError(err)}`);
+    return jsonResponse(200, fallback);
+  }
+}
+
+/**
+ * The Gorelo type id for a create: the client's `tickettype_id` when it names a real
+ * Gorelo type (as offered by handleTicketTypes), else DEFAULT_TYPE_ID. Only a
+ * non-default id costs a Gorelo lookup; an unknown or unverifiable id falls back to
+ * the default rather than risking a 400 on the create.
+ */
+async function resolveTypeId(env: Env, t: HaloTicket): Promise<number> {
+  const def = Number(env.DEFAULT_TYPE_ID);
+  const asked = num(t.tickettype_id);
+  if (!asked || asked === def) return def;
+  try {
+    const types = await new GoreloClient(env).listTicketTypes();
+    if (types.some((x) => x.id === asked)) return asked;
+    breadcrumb(`HALO tickettype_id=${asked} is not a Gorelo type, using default ${def}`);
+  } catch (err) {
+    breadcrumb(`HALO tickettype lookup failed, using default ${def} ${describeError(err)}`);
+  }
+  return def;
+}
+
+/**
  * Gorelo's fixed ticket priority scale (GET /v1/tickets/priorities, identical for every
  * account), minus 0 "None". The ids ARE Gorelo PriorityIds, so a vendor that maps its
  * own severities onto these options hands the relay a Gorelo priority directly.
@@ -477,10 +518,21 @@ const GORELO_PRIORITIES: ReadonlyArray<readonly [number, string]> = [
  */
 const SEVERITY_LOOKUP_ID = 27;
 
+/**
+ * Halo lookup list behind Nerdio's "Ticket impact" picker (observed 2026-11-16).
+ * Gorelo has no impact field, so it gets one placeholder option (PLACEHOLDER_NAME);
+ * whatever the vendor sends back for it is ignored on create.
+ */
+const IMPACT_LOOKUP_ID = 12;
+
+/** Label for the single option offered where Gorelo has no equivalent field. */
+const PLACEHOLDER_NAME = "N/A (not used by Gorelo)";
+
 function handleConfig(env: Env, resource: string, url?: URL): Response {
   switch (resource) {
     case "tickettype":
     case "tickettypes":
+      // Async (live Gorelo list) -- answered in handleApi before reaching here.
       return jsonResponse(200, [haloTicketType(Number(env.DEFAULT_TYPE_ID), "Incident")]);
     case "status":
     case "statuses":
@@ -514,8 +566,16 @@ function handleConfig(env: Env, resource: string, url?: URL): Response {
           GORELO_PRIORITIES.map(([id, name], i) => haloLookup(id, SEVERITY_LOOKUP_ID, name, i + 1)),
         );
       }
+      if (lookupid === IMPACT_LOOKUP_ID) {
+        return jsonResponse(200, [haloLookup(1, IMPACT_LOOKUP_ID, PLACEHOLDER_NAME, 1)]);
+      }
       return jsonResponse(200, []);
     }
+    case "category":
+    case "categories":
+      // Gorelo has no ticket categories: one placeholder so a picker that wants a value
+      // (Nerdio's "Ticket category") has something to select. Ignored on create.
+      return jsonResponse(200, [haloCategory(1, PLACEHOLDER_NAME, num(url?.searchParams.get("type_id")) ?? 1)]);
     default:
       return jsonResponse(200, []);
   }
@@ -804,6 +864,7 @@ function buildTicketCommand(
   t: HaloTicket,
   routing: Routing,
   product: Product | null,
+  typeId: number = Number(env.DEFAULT_TYPE_ID),
 ): CreatePublicTicketCommand {
   const summary = str(t.summary) || str(t.subject) || "(no subject)";
   // "This is an emergency" bumps the priority (when EMERGENCY_PRIORITY is set).
@@ -818,7 +879,7 @@ function buildTicketCommand(
     description: buildHaloDescription(t, routing, product),
     statusId: Number(env.DEFAULT_STATUS_ID),
     groupId: Number(env.DEFAULT_GROUP_ID),
-    typeId: Number(env.DEFAULT_TYPE_ID),
+    typeId,
     priorityId,
     sourceId: Number(env.DEFAULT_SOURCE) as TicketSource,
     tagIds: resolveTicketTagIds(env, product),
@@ -942,7 +1003,7 @@ async function handleCreateTicket(
 ): Promise<Response> {
   const t = firstTicket(parseJson(body));
   const routing = await resolveRouting(env, t, product);
-  const cmd = buildTicketCommand(env, t, routing, product);
+  const cmd = buildTicketCommand(env, t, routing, product, await resolveTypeId(env, t));
   const haloId = assetNum(crypto.randomUUID()) || Date.now() % 1_000_000_000_000;
 
   // Huntress resolution: Huntress signals "resolved" by EDITING the original ticket
@@ -1474,6 +1535,7 @@ async function handleApi(
     }
     if (resource === "site" || resource === "sites") return handleSite(env, url);
     if (resource === "asset" || resource === "assets") return handleAsset(env, url);
+    if (resource === "tickettype" || resource === "tickettypes") return handleTicketTypes(env);
     return handleConfig(env, resource, url);
   }
   return jsonResponse(200, []);

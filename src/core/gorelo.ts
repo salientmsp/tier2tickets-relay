@@ -310,6 +310,18 @@ export class GoreloClient {
   }
 
   /**
+   * GET /v1/tickets/types -- the account's ticket types ({ id, name }). Enveloped,
+   * single page. Used to serve a Halo client's ticket-type picker and to validate a
+   * type id the client sends back on create.
+   */
+  async listTicketTypes(): Promise<Array<{ id: number; name: string }>> {
+    const raw = await this.getJsonWithRetry<unknown>("/v1/tickets/types", 2);
+    return asArray<{ id?: unknown; name?: unknown }>(unwrap(raw).data)
+      .map((t) => ({ id: Number(t.id), name: String(t.name ?? "") }))
+      .filter((t) => Number.isInteger(t.id) && t.id > 0 && t.name !== "");
+  }
+
+  /**
    * POST /v1/alerts/ — Gorelo's native external-alert endpoint. Throws GoreloError
    * (with upstream status + notification code) on non-2xx so the handler can return
    * 502. The response is a boolean success envelope with no id, so there's nothing to

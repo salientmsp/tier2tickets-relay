@@ -34,6 +34,12 @@ function installFetch(): void {
     if (req.method === "GET" && /^\/v1\/assets\/agents\//.test(url.pathname)) {
       return new Response("", { status: 404 });
     }
+    // Same for the live ticket-type list: /api/TicketType and a non-default
+    // tickettype_id on create both tolerate it failing and fall back to
+    // DEFAULT_TYPE_ID. Tests that care about the list mock it explicitly.
+    if (req.method === "GET" && url.pathname === "/v1/tickets/types") {
+      return new Response("", { status: 404 });
+    }
     throw new Error(`unmocked fetch: ${req.method} ${req.url}`);
   }) as typeof fetch;
 }
@@ -557,7 +563,7 @@ describe("Halo lookups (Gorelo-backed)", () => {
   });
 
   it("GET /api/lookup for any other lookupid is an empty bare array", async () => {
-    for (const id of ["12", "1", ""]) {
+    for (const id of ["5", "1", ""]) {
       const res = await req(`/api/lookup?showallcodes=true&lookupid=${id}`);
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual([]);
@@ -565,9 +571,38 @@ describe("Halo lookups (Gorelo-backed)", () => {
   });
 
   it("GET on an unmodelled /api/* resource answers an empty list, not a 404", async () => {
-    const res = await req("/api/category?showall=true&type_id=1");
+    const res = await req("/api/somethingnew?showall=true");
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual([]);
+  });
+
+  it("GET /api/category and lookupid=12 (impact) offer one placeholder option", async () => {
+    const cat = (await (await req("/api/category?showall=true&type_id=1")).json()) as Array<Record<string, unknown>>;
+    expect(cat).toHaveLength(1);
+    expect(cat[0]).toMatchObject({ id: 1, type_id: 1 });
+    expect(String(cat[0]!.category_name)).toMatch(/N\/A/);
+    const impact = (await (await req("/api/lookup?showallcodes=true&lookupid=12")).json()) as Array<Record<string, unknown>>;
+    expect(impact).toHaveLength(1);
+    expect(impact[0]).toMatchObject({ id: 1, lookupid: 12 });
+  });
+
+  it("GET /api/TicketType lists the live Gorelo types, default first", async () => {
+    routes.push({
+      method: "GET",
+      match: (u) => u.pathname === "/v1/tickets/types",
+      handler: () =>
+        json(200, envelope(pascal([
+          { id: 7046, name: "Request" },
+          { id: 3, name: "Incident" },
+          { id: 7047, name: "Proactive" },
+        ]))),
+    });
+    const j = (await (await req("/api/TicketType")).json()) as Array<Record<string, unknown>>;
+    expect(j.map((t) => [t.id, t.name])).toEqual([
+      [3, "Incident"],
+      [7046, "Request"],
+      [7047, "Proactive"],
+    ]);
   });
 
   it("GET /api/Team returns a full-shape bare array", async () => {
@@ -1334,6 +1369,24 @@ describe("Halo immediate ticket create (one-shot product: Huntress)", () => {
       // Nothing left queued.
       const row = await env.DB.prepare(`SELECT halo_id FROM pending_tickets`).first();
       expect(row).toBeNull();
+    });
+  });
+
+  it("honors a tickettype_id that is a real Gorelo type, else falls back to DEFAULT_TYPE_ID", async () => {
+    await withHuntressEnabled(async () => {
+      routes.push({
+        method: "GET",
+        match: (u) => u.pathname === "/v1/tickets/types",
+        handler: () => json(200, envelope(pascal([{ id: 3, name: "Incident" }, { id: 7047, name: "Proactive" }]))),
+      });
+      let cap = captureGoreloCreate();
+      await req("/api/Tickets", huntressInit([{ summary: "Typed", details: "x", client_id: "10", tickettype_id: "7047" }]));
+      expect(cap.posted()).toMatchObject({ typeId: 7047 });
+
+      routes = routes.filter((r) => !(r.method === "POST" && r.match(new URL("https://x/v1/tickets"))));
+      cap = captureGoreloCreate();
+      await req("/api/Tickets", huntressInit([{ summary: "Bogus", details: "x", client_id: "10", tickettype_id: "999" }]));
+      expect(cap.posted()).toMatchObject({ typeId: 3 });
     });
   });
 
