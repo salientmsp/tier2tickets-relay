@@ -251,6 +251,14 @@ database_name = "tier2tickets-relay"
 database_id = "fe2efa6c-f7d4-439b-adfd-3dc10ee0caa5"
 migrations_dir = "migrations"
 
+# Run the Worker near Gorelo's US-West API instead of at the edge nearest the caller.
+# CIPP's Azure egress lands at far-off Cloudflare colos (NRT, GRU, ARN, ...), and
+# Gorelo's Azure Application Gateway answers 403 to API calls from there, so
+# immediate creates failed and only the cron retry (run in the US) got through.
+# Deployment-specific: match GORELO_BASE_URL's region (api.aue -> e.g. azure:australiaeast).
+[placement]
+region = "azure:westus2"
+
 # =====================================================================================
 # STAGING ENVIRONMENT — a separate Cloudflare tenant.
 # Deploy with:  npm run deploy:staging   (wrangler deploy --env staging)
