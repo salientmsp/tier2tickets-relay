@@ -34,6 +34,10 @@ export interface Env {
   // runs in the MSP's own Azure subscription, so these are its App Service's
   // outbound addresses. Empty => no Nerdio request can match.
   NERDIO_IPS?: string;
+  ENABLE_CIPP?: string; // "true" | "false" (default false)
+  // CIPP's allowed source IPs/CIDRs (comma/space separated): the CIPP instance's
+  // Function App outbound addresses. Per-deployment. Empty => no CIPP request matches.
+  CIPP_IPS?: string;
   DEFAULT_GROUP_ID: string; // int as string
   DEFAULT_TYPE_ID: string; // int as string
   DEFAULT_STATUS_ID: string; // int as string (REQUIRED by Gorelo's validator)
@@ -53,6 +57,7 @@ export interface Env {
   HDB_TAG_ID?: string; // tag applied to Helpdesk Buttons tickets ("Submitted VIA HDB")
   HUNTRESS_TAG_ID?: string; // tag applied to Huntress tickets ("Submitted via Huntress")
   NERDIO_TAG_ID?: string; // tag applied to Nerdio tickets (unset => FALLBACK_TAG_ID)
+  CIPP_TAG_ID?: string; // tag applied to CIPP tickets (unset => FALLBACK_TAG_ID)
   // Catch-all tag applied when a ticket's product has no tag of its own (e.g. a service
   // onboarded before its dedicated tag is wired up) — "Submitted via API".
   FALLBACK_TAG_ID?: string;
@@ -140,6 +145,9 @@ export interface Env {
   // Nerdio's own OAuth pair. Set the secret via `wrangler secret put HALO_CLIENT_SECRET_NERDIO`.
   HALO_CLIENT_ID_NERDIO?: string;
   HALO_CLIENT_SECRET_NERDIO?: string;
+  // CIPP's own OAuth pair. Set the secret via `wrangler secret put HALO_CLIENT_SECRET_CIPP`.
+  HALO_CLIENT_ID_CIPP?: string;
+  HALO_CLIENT_SECRET_CIPP?: string;
   // Bearer-token enforcement on Halo resource endpoints (audit F1). Active per
   // request when the MATCHED product has a credential pair set. Values (default off):
   //   "off"     — no token check (identical to legacy behavior)
@@ -231,7 +239,7 @@ export interface UpdatePublicTicketCommand {
   statusId?: number;
 }
 
-/** POST /v1/tickets/{ticketId}/comments body. `conversationTypeId` 1 = Public (the ticket's main thread) — the only value the relay sends. */
+/** POST /v1/tickets/{ticketId}/comments body. `conversationTypeId` 1 = Public, 2 = Private (both the ticket's main thread). */
 export interface CreatePublicCommentCommand {
   conversationTypeId: number;
   body: string; // HTML

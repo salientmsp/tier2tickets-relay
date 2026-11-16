@@ -1942,6 +1942,143 @@ describe("Nerdio Manager for MSP (replayed live payloads, 2026-11-16)", () => {
   });
 });
 
+describe("CIPP HaloPSA extension (payload shapes per CIPP-API Modules/CippExtensions/Public/Halo)", () => {
+  const CIPP_IP = "52.170.10.20";
+  const cippInit = (bodyObj: unknown): RequestInit => ({
+    method: "POST",
+    headers: { "content-type": "application/json", "CF-Connecting-IP": CIPP_IP },
+    body: JSON.stringify(bodyObj),
+  });
+  const cippGet = (path: string) => req(path, { method: "GET", headers: { "CF-Connecting-IP": CIPP_IP } });
+
+  async function withCipp(fn: () => Promise<void>): Promise<void> {
+    const e = env as { ENABLE_CIPP?: string; CIPP_IPS?: string; ENFORCE_IP_ALLOWLIST?: string };
+    const prev = { ...e };
+    e.ENABLE_CIPP = "true";
+    e.CIPP_IPS = CIPP_IP;
+    e.ENFORCE_IP_ALLOWLIST = "true";
+    try {
+      await fn();
+    } finally {
+      e.ENABLE_CIPP = prev.ENABLE_CIPP;
+      e.CIPP_IPS = prev.CIPP_IPS;
+      e.ENFORCE_IP_ALLOWLIST = prev.ENFORCE_IP_ALLOWLIST;
+    }
+  }
+
+  // New-HaloPSATicket's create body (one alert).
+  const cippTicket = {
+    usertype: 1,
+    userlookup: { id: 55, lookupdisplay: "Enter Details Manually" },
+    client_id: 10,
+    _forcereassign: true,
+    site_id: null,
+    user_name: null,
+    reportedby: null,
+    summary: "CIPP Alert: New MFA method registered",
+    details_html: "<p>User jane@corp.com registered a new MFA method.</p>",
+    donotapplytemplateintheapi: true,
+    attachments: null,
+    _novalidate: true,
+    tickettype_id: 7045,
+    priority_id: 2,
+  };
+
+  it("answers GET /api/tickettype/{id} with one type carrying a non-zero default_sla", async () => {
+    await withCipp(async () => {
+      routes.push({
+        method: "GET",
+        match: (u) => u.pathname === "/v1/tickets/types",
+        handler: () => json(200, envelope(pascal([{ id: 7045, name: "Incident" }]))),
+      });
+      const res = await cippGet("/api/tickettype/7045");
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body).toMatchObject({ id: 7045, name: "Incident" });
+      expect(Number(body.default_sla)).toBeGreaterThan(0);
+    });
+  });
+
+  it("creates with userlookup.id as the contact and priority_id as the Gorelo priority", async () => {
+    await withCipp(async () => {
+      routes.push({
+        method: "GET",
+        match: (u) => u.pathname === "/v1/tickets/types",
+        handler: () => json(200, envelope(pascal([{ id: 3, name: "Incident" }, { id: 7045, name: "Incident" }]))),
+      });
+      const cap = captureGoreloCreate({ number: 9001, displayNumber: "9001" });
+      const res = await req("/api/Tickets", cippInit([cippTicket]));
+      expect(res.status).toBe(201);
+      expect(((await res.json()) as { id: number }).id).toBe(9001);
+      expect(cap.posted()).toMatchObject({
+        title: cippTicket.summary,
+        clientId: 10,
+        contactId: 55,
+        priorityId: 2,
+        typeId: 7045,
+      });
+    });
+  });
+
+  it("ignores userlookup.id -1 (no matched user) and an out-of-range priority_id", async () => {
+    await withCipp(async () => {
+      const cap = captureGoreloCreate();
+      await req("/api/Tickets", cippInit([{ ...cippTicket, userlookup: { id: -1 }, priority_id: 77 }]));
+      expect(cap.posted()).toMatchObject({
+        clientId: 10,
+        contactId: null,
+        priorityId: Number((env as { DEFAULT_PRIORITY: string }).DEFAULT_PRIORITY),
+      });
+    });
+  });
+
+  it("reports hasbeenclosed and adds a consolidated repeat as a private comment", async () => {
+    await withCipp(async () => {
+      const uuid = "cb83b6cf-959c-4eed-afb8-ba3e18a3c53a";
+      let liveStatus = 2;
+      routes.push({
+        method: "GET",
+        match: (u) => u.pathname === `/v1/tickets/${uuid}`,
+        handler: () =>
+          json(200, envelope(pascal({
+            id: uuid, number: 9002, displayNumber: "9002", title: cippTicket.summary,
+            status: { id: liveStatus, name: "x" }, type: { id: 7045, name: "Incident" }, priority: { id: 2, name: "High" },
+          }))),
+      });
+      captureGoreloCreate({ uuid, number: 9002 });
+      await req("/api/Tickets", cippInit([cippTicket]));
+
+      const open = (await (await cippGet("/api/Tickets/9002?includedetails=true")).json()) as Record<string, unknown>;
+      expect(open).toMatchObject({ id: 9002, hasbeenclosed: false });
+
+      const comment = captureGoreloComment();
+      const update = captureGoreloUpdate();
+      const res = await req(
+        "/api/actions",
+        cippInit([{ ticket_id: 9002, outcome_id: 7, hiddenfromuser: true, note_html: "<p>Alert fired again</p>" }]),
+      );
+      expect(res.status).toBe(201);
+      expect(update.calls()).toBe(0);
+      expect(comment.commented()).toMatchObject({ conversationTypeId: 2 });
+      expect(String(comment.commented()!.body)).toContain("Alert fired again");
+
+      liveStatus = 4; // Closed in Gorelo -> CIPP opens a new ticket next time
+      const closed = (await (await cippGet("/api/Tickets/9002")).json()) as Record<string, unknown>;
+      expect(closed.hasbeenclosed).toBe(true);
+    });
+  });
+
+  it("answers non-2xx when the note cannot be posted, so CIPP opens a new ticket", async () => {
+    await withCipp(async () => {
+      captureGoreloCreate({ number: 9003 });
+      await req("/api/Tickets", cippInit([cippTicket]));
+      captureGoreloComment({ ok: false });
+      const res = await req("/api/actions", cippInit([{ ticket_id: 9003, hiddenfromuser: true, note_html: "x" }]));
+      expect(res.status).toBe(502);
+    });
+  });
+});
+
 describe("VIP contacts (VIP_CONTACT_TAG_IDS)", () => {
   async function createFor(tagIds: number[] | null): Promise<{ posted: Record<string, unknown> | undefined; lookups: number }> {
     let lookups = 0;

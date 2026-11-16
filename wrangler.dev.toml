@@ -61,6 +61,10 @@ ENABLE_NERDIO = "false"
 # Nerdio Manager for MSP source IPs (comma/space separated): the NMM App Service's
 # outbound addresses in YOUR Azure subscription (see src/ingress/products.ts "nerdio").
 NERDIO_IPS = ""
+ENABLE_CIPP = "false"
+# CIPP source IPs (comma/space separated): your CIPP instance's Function App outbound
+# addresses (see src/ingress/products.ts "cipp").
+CIPP_IPS = ""
 
 # OFF for dev. Jira is a REAL outbound dependency (there is no Jira sandbox), so a local
 # run must not mirror test tickets into a client's real Jira. Set ENABLE_JIRA="true" +
@@ -82,6 +86,7 @@ CATCHALL_CLIENT_ID = "15567"
 HDB_TAG_ID = "31974"
 HUNTRESS_TAG_ID = "32870"
 NERDIO_TAG_ID = "34732"
+CIPP_TAG_ID = "38344"
 FALLBACK_TAG_ID = "32885"
 EMERGENCY_PRIORITY = "1"
 # VIP contacts: Gorelo contact tag ids (GET /v1/contacts/tags; scripts/gorelo-ids.sh),

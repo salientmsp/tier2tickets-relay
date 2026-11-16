@@ -537,6 +537,23 @@ async function handleAgents(env: Env): Promise<Response> {
 }
 
 /**
+ * GET /api/TicketType/{id} -- one type as a single object (Halo's shape for a by-id
+ * read). `default_sla` is non-zero: CIPP sends a ticket's priority_id only when the
+ * type reports an SLA, and Gorelo applies its own SLAs, so the value is a marker.
+ */
+async function handleTicketTypeById(env: Env, id: number): Promise<Response> {
+  let name = id === Number(env.DEFAULT_TYPE_ID) ? "Incident" : "";
+  try {
+    const hit = (await new GoreloClient(env).listTicketTypes()).find((t) => t.id === id);
+    if (hit) name = hit.name;
+    else if (!name) return jsonResponse(404, { id, message: "ticket type not found" });
+  } catch (err) {
+    breadcrumb(`HALO tickettype ${id} lookup failed ${describeError(err)}`);
+  }
+  return jsonResponse(200, { ...haloTicketType(id, name || `Type ${id}`), default_sla: 1 });
+}
+
+/**
  * The Gorelo type id for a create: the client's `tickettype_id` when it names a real
  * Gorelo type (as offered by handleTicketTypes), else DEFAULT_TYPE_ID. Only a
  * non-default id costs a Gorelo lookup; an unknown or unverifiable id falls back to
@@ -746,7 +763,9 @@ async function resolveRouting(env: Env, t: HaloTicket, product: Product | null):
   // Contact: a real user_id first (the synthetic unregistered id resolves to
   // nothing), then the reporter email parsed from the report.
   let contact: ContactRow | null = null;
-  const uid = num(t.user_id);
+  // CIPP sends the matched user as `userlookup: { id }` (-1 when none) instead of user_id.
+  const lookupId = num((t.userlookup as { id?: unknown } | null | undefined)?.id);
+  const uid = num(t.user_id) ?? (lookupId && lookupId > 0 ? lookupId : null);
   if (uid && uid !== HALO_UNREGISTERED_USER_ID) contact = await getContactById(env.DB, uid);
   if (!contact && email) contact = await findContactByEmail(env.DB, email);
 
@@ -946,11 +965,15 @@ function buildTicketCommand(
   const summary = str(t.summary) || str(t.subject) || "(no subject)";
   // "This is an emergency" bumps the priority (when EMERGENCY_PRIORITY is set).
   const emergencyId = num(env.EMERGENCY_PRIORITY);
-  // A product that sends its severity as a Gorelo priority id in `urgency` (Nerdio)
-  // overrides the default; an emergency press still wins.
-  const urgency = product?.urgencyIsPriority ? num(t.urgency) : null;
+  // A product that sends a Gorelo priority id -- as `urgency` (Nerdio) or `priority_id`
+  // (CIPP) -- overrides the default; an emergency press still wins.
+  const asked = product?.urgencyIsPriority
+    ? num(t.urgency)
+    : product?.priorityIdIsPriority
+      ? num(t.priority_id)
+      : null;
   const basePriority =
-    urgency != null && GORELO_PRIORITIES.some(([id]) => id === urgency) ? urgency : Number(env.DEFAULT_PRIORITY);
+    asked != null && GORELO_PRIORITIES.some(([id]) => id === asked) ? asked : Number(env.DEFAULT_PRIORITY);
   const priorityId = (routing.isEmergency && emergencyId ? emergencyId : basePriority) as PublicTicketPriority;
   return {
     title: summary,
@@ -1080,6 +1103,8 @@ async function handleGetTicketById(env: Env, id: number): Promise<Response> {
       .getTicket(row.gorelo_id, 1)
       .catch((err) => (breadcrumb(`HALO ticket read-back failed gorelo_id=${row.gorelo_id}: ${describeError(err)}`), null));
   }
+  const haloStatus =
+    live?.statusId != null ? haloStatusFromGorelo(live.statusId) : (row.status_id ?? Number(env.DEFAULT_STATUS_ID));
   return jsonResponse(200, {
     id: row.halo_id,
     summary: live?.title ?? row.title ?? "",
@@ -1087,8 +1112,9 @@ async function handleGetTicketById(env: Env, id: number): Promise<Response> {
     site_id: 0,
     user_id: row.contact_id ?? 0,
     tickettype_id: live?.typeId ?? Number(env.DEFAULT_TYPE_ID),
-    status_id:
-      live?.statusId != null ? haloStatusFromGorelo(live.statusId) : (row.status_id ?? Number(env.DEFAULT_STATUS_ID)),
+    status_id: haloStatus,
+    // CIPP reads this to decide between noting an open ticket and opening a new one.
+    hasbeenclosed: CLOSED_HALO_STATUSES.has(haloStatus),
     gorelo_ticket_id: row.gorelo_id,
     gorelo_ticket_number: row.number,
     gorelo_display_number: row.display_number,
@@ -1390,11 +1416,13 @@ async function handleActions(
 
   let haloId: number | null = null;
   let newStatus: number | null = null;
+  let hiddenFromUser = false;
   const noteParts: string[] = [];
   for (const raw of actions) {
     const a = lowerKeys(raw);
     haloId = haloId ?? num(a.ticket_id) ?? num(a.ticketid) ?? num(a.ticket) ?? num(a.request_id);
     newStatus = newStatus ?? num(a.new_status) ?? num(a.status_id);
+    if (a.hiddenfromuser === true || a.hiddenfromuser === "true") hiddenFromUser = true;
     const note = str(a.note_html) || str(a.note) || str(a.details_html) || str(a.details) || str(a.outcome);
     if (note) noteParts.push(note);
   }
@@ -1418,6 +1446,25 @@ async function handleActions(
       return jsonResponse(201, [{ id: actionId, ticket_id: haloId }]);
     }
     breadcrumb(`HALO action halo_id=${haloId}: status ${newStatus} for a ticket not in the ledger — ignored`);
+  }
+
+  // A product that consolidates repeats into an open ticket (CIPP) sends the repeat as a
+  // note on that ticket: post it to the Gorelo ticket as a comment, Private when the
+  // client marked it hidden from the end user.
+  if (product?.actionNotesAsComments && noteText) {
+    const original = await getCreatedTicket(env.DB, haloId);
+    if (original?.gorelo_id) {
+      try {
+        await new GoreloClient(env).addTicketComment(original.gorelo_id, noteText, commentAuthorName(product), hiddenFromUser);
+        breadcrumb(`HALO action halo_id=${haloId}: note added as a ${hiddenFromUser ? "private" : "public"} comment`);
+        return jsonResponse(201, [{ id: actionId, ticket_id: haloId }]);
+      } catch (err) {
+        // Answer non-2xx so the client falls back to opening a new ticket (CIPP does)
+        // rather than losing the repeat.
+        breadcrumb(`HALO action note comment failed halo_id=${haloId}: ${describeError(err)}`);
+        return jsonResponse(502, { error: "note_failed" });
+      }
+    }
   }
 
   const pending = await takePendingTicket(env.DB, haloId);
@@ -1708,7 +1755,10 @@ async function handleApi(
     }
     if (resource === "site" || resource === "sites") return handleSite(env, url);
     if (resource === "asset" || resource === "assets") return handleAsset(env, url);
-    if (resource === "tickettype" || resource === "tickettypes") return handleTicketTypes(env);
+    if (resource === "tickettype" || resource === "tickettypes") {
+      const id = trailingId(url.pathname);
+      return id != null ? handleTicketTypeById(env, id) : handleTicketTypes(env);
+    }
     if (resource === "agent" || resource === "agents") return handleAgents(env);
     return handleConfig(env, resource, url);
   }
