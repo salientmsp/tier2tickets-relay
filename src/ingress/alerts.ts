@@ -2,7 +2,7 @@ import { findDeviceFullByHostname, getAlert, initSchema, listClientRows, putAler
 import { GoreloClient, GoreloError } from "../core/gorelo.js";
 import { breadcrumb, debug, describeError } from "../core/log.js";
 import { normalizeHost } from "../core/parse.js";
-import { ipInCidr } from "./products.js";
+import { ipInCidr, parseAllowlist } from "./products.js";
 import type { AlertLevel, Env, PostAlertRequest } from "../core/types.js";
 
 /**
@@ -125,19 +125,6 @@ function constantTimeEqual(a: string, b: string): boolean {
   let diff = 0;
   for (let i = 0; i < ea.length; i++) diff |= ea[i]! ^ eb[i]!;
   return diff === 0;
-}
-
-/** Split an IP allowlist string into exact IPs and CIDR ranges. */
-function parseAllowlist(raw: string | undefined): { ips: Set<string>; cidrs: string[] } {
-  const ips = new Set<string>();
-  const cidrs: string[] = [];
-  for (const entry of (raw ?? "").split(/[\s,]+/)) {
-    const e = entry.trim();
-    if (!e) continue;
-    if (e.includes("/")) cidrs.push(e);
-    else ips.add(e);
-  }
-  return { ips, cidrs };
 }
 
 /**
