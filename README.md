@@ -980,6 +980,10 @@ curl -X POST https://<your-worker-host>/admin/debug-error -H "X-Admin-Key: <ADMI
     `GET /api/Tickets/{id}` carries `hasbeenclosed`, and with "consolidate tickets" on a
     repeat alert's `POST /api/actions` note lands on the open Gorelo ticket as a comment
     (Private when `hiddenfromuser`).
+    Its settings pickers are filled too: the ticket type's SLA (`GET /api/SLA/1`) lists
+    Gorelo's priorities, Request Source (lookup 22) lists Gorelo's sources (the pick is
+    used as the ticket's source), and Outcome offers one "Add note" entry (its id is
+    ignored; the note becomes a comment).
   - The whole allowlist is disabled **only** by an explicit, normalized
     `ENFORCE_IP_ALLOWLIST` of `false`, `0`, or empty; an unset var, `true`, or any
     other value enforces. An absent `CF-Connecting-IP` header also fails closed.

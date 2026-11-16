@@ -550,7 +550,12 @@ async function handleTicketTypeById(env: Env, id: number): Promise<Response> {
   } catch (err) {
     breadcrumb(`HALO tickettype ${id} lookup failed ${describeError(err)}`);
   }
-  return jsonResponse(200, { ...haloTicketType(id, name || `Type ${id}`), default_sla: 1 });
+  // workflow_id points CIPP's outcome picker at RELAY_WORKFLOW (see handleConfig).
+  return jsonResponse(200, {
+    ...haloTicketType(id, name || `Type ${id}`),
+    default_sla: RELAY_SLA_ID,
+    workflow_id: RELAY_WORKFLOW_ID,
+  });
 }
 
 /**
@@ -599,6 +604,37 @@ const SEVERITY_LOOKUP_ID = 27;
  */
 const IMPACT_LOOKUP_ID = 12;
 
+/**
+ * Halo lookup list of request sources (lookup type 22; CIPP's "Request Source" picker
+ * reads it). Answered with Gorelo's ticket sources; a product with `sourceIsSource`
+ * sends the chosen id back as `source` on create.
+ */
+const SOURCE_LOOKUP_ID = 22;
+const GORELO_SOURCES: ReadonlyArray<readonly [TicketSource, string]> = [
+  [1, "Web"],
+  [2, "Email"],
+  [3, "Phone"],
+  [4, "Chat"],
+  [5, "Alert"],
+  [6, "API"],
+];
+
+/**
+ * The one SLA the relay reports. A Halo ticket type names an SLA, and the SLA lists
+ * the priorities that apply to it; Gorelo applies its own SLAs, so this exists only so
+ * clients that pick a priority through the SLA (CIPP) offer Gorelo's priorities.
+ */
+const RELAY_SLA_ID = 1;
+
+/**
+ * The one workflow the relay reports, with a single "add a note" action (outcome 7,
+ * Halo's built-in internal note). CIPP lists outcomes through the ticket type's
+ * workflow and posts consolidated repeats as that action; the relay turns it into a
+ * Gorelo comment, so the outcome itself carries no meaning here.
+ */
+const RELAY_WORKFLOW_ID = 1;
+const NOTE_OUTCOME_ID = 7;
+
 /** Label for the single option offered where Gorelo has no equivalent field. */
 const PLACEHOLDER_NAME = "N/A (not used by Gorelo)";
 
@@ -641,11 +677,41 @@ function handleConfig(env: Env, resource: string, url?: URL): Response {
           GORELO_PRIORITIES.map(([id, name], i) => haloLookup(id, SEVERITY_LOOKUP_ID, name, i + 1)),
         );
       }
+      if (lookupid === SOURCE_LOOKUP_ID) {
+        return jsonResponse(
+          200,
+          GORELO_SOURCES.map(([id, name], i) => haloLookup(id, SOURCE_LOOKUP_ID, name, i + 1)),
+        );
+      }
       if (lookupid === IMPACT_LOOKUP_ID) {
         return jsonResponse(200, [haloLookup(1, IMPACT_LOOKUP_ID, PLACEHOLDER_NAME, 1)]);
       }
       return jsonResponse(200, []);
     }
+    case "sla":
+    case "slas": {
+      // GET /api/SLA/{id}: the priorities CIPP may offer for the ticket type's SLA.
+      const sla = {
+        id: RELAY_SLA_ID,
+        name: "Gorelo",
+        priorities: GORELO_PRIORITIES.map(([id]) => ({ id, priorityid: id, slaid: RELAY_SLA_ID })),
+      };
+      return jsonResponse(200, url && trailingId(url.pathname) != null ? sla : [sla]);
+    }
+    case "workflow":
+    case "workflows": {
+      const workflow = {
+        id: RELAY_WORKFLOW_ID,
+        name: "Gorelo",
+        steps: [{ id: 1, name: "Open", actions: [{ action_id: NOTE_OUTCOME_ID }] }],
+      };
+      return jsonResponse(200, url && trailingId(url.pathname) != null ? workflow : [workflow]);
+    }
+    case "outcome":
+    case "outcomes":
+      return jsonResponse(200, [
+        { id: NOTE_OUTCOME_ID, outcome: "Internal note", buttonname: "Add note (Gorelo comment)", hiddenfromuser: true },
+      ]);
     case "category":
     case "categories":
       // Gorelo has no ticket categories: one placeholder so a picker that wants a value
@@ -975,6 +1041,10 @@ function buildTicketCommand(
   const basePriority =
     asked != null && GORELO_PRIORITIES.some(([id]) => id === asked) ? asked : Number(env.DEFAULT_PRIORITY);
   const priorityId = (routing.isEmergency && emergencyId ? emergencyId : basePriority) as PublicTicketPriority;
+  const askedSource = product?.sourceIsSource ? num(t.source) : null;
+  const sourceId = (
+    askedSource != null && GORELO_SOURCES.some(([id]) => id === askedSource) ? askedSource : Number(env.DEFAULT_SOURCE)
+  ) as TicketSource;
   return {
     title: summary,
     createdByName: routing.contactName,
@@ -986,7 +1056,7 @@ function buildTicketCommand(
     groupId: Number(env.DEFAULT_GROUP_ID),
     typeId,
     priorityId,
-    sourceId: Number(env.DEFAULT_SOURCE) as TicketSource,
+    sourceId,
     tagIds: resolveTicketTagIds(env, product),
     agentAssetIds: routing.agentAssetIds,
     // Only let Gorelo email the requester when SEND_TICKET_CREATED_EMAIL is on AND we

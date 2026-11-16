@@ -86,6 +86,11 @@ export interface Product {
   // ticket as a comment (Private when `hiddenfromuser`), instead of being dropped.
   // CIPP consolidates a repeat alert into its open ticket this way.
   actionNotesAsComments?: boolean;
+
+  // When true, the Halo ticket's `source` carries a Gorelo source id (the client picked
+  // it from lookup 22, which serves Gorelo's sources) and sets the created ticket's
+  // source when valid (1-6); otherwise DEFAULT_SOURCE. CIPP sends it this way.
+  sourceIsSource?: boolean;
 }
 
 /**
@@ -202,6 +207,7 @@ export const PRODUCTS: Record<string, Product> = {
     tagVar: "CIPP_TAG_ID",
     priorityIdIsPriority: true,
     actionNotesAsComments: true,
+    sourceIsSource: true,
   },
 };
 

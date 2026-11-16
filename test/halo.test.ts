@@ -2068,6 +2068,43 @@ describe("CIPP HaloPSA extension (payload shapes per CIPP-API Modules/CippExtens
     });
   });
 
+  it("fills CIPP's priority, request-source and outcome pickers (replayed 2026-11-16 settings load)", async () => {
+    await withCipp(async () => {
+      routes.push({
+        method: "GET",
+        match: (u) => u.pathname === "/v1/tickets/types",
+        handler: () => json(200, envelope(pascal([{ id: 17568, name: "Alerts" }]))),
+      });
+      // Get-HaloTicketTypeSlaId -> Get-HaloPriority: SLA priorities filter /api/Priority by id.
+      const type = (await (await cippGet("/api/tickettype/17568")).json()) as Record<string, unknown>;
+      expect(type).toMatchObject({ id: 17568, name: "Alerts", default_sla: 1, workflow_id: 1 });
+      const sla = (await (await cippGet(`/api/SLA/${type.default_sla}`)).json()) as { priorities: { id: number }[] };
+      const prios = (await (await cippGet("/api/Priority")).json()) as { id: number; name: string }[];
+      const offered = prios.filter((p) => sla.priorities.some((x) => x.id === p.id)).map((p) => p.name);
+      expect(offered).toEqual(["Urgent", "High", "Normal", "Low"]);
+
+      // Get-HaloRequestSource: lookup 22 -> { id, name }.
+      const sources = (await (await cippGet("/api/lookup?lookupid=22&showall=true")).json()) as { id: number; name: string }[];
+      expect(sources.map((x) => x.name)).toContain("Alert");
+
+      // Get-HaloTicketOutcome: outcomes whose id is an action of the type's workflow.
+      const wf = (await (await cippGet(`/api/workflow/${type.workflow_id}`)).json()) as {
+        steps: { actions: { action_id: number }[] }[];
+      };
+      const actionIds = wf.steps.flatMap((st) => st.actions.map((a) => a.action_id));
+      const outcomes = (await (await cippGet("/api/outcome")).json()) as { id: number }[];
+      expect(outcomes.filter((o) => actionIds.includes(o.id)).length).toBe(1);
+    });
+  });
+
+  it("uses the request source CIPP sends when it is a Gorelo source", async () => {
+    await withCipp(async () => {
+      const cap = captureGoreloCreate();
+      await req("/api/Tickets", cippInit([{ ...cippTicket, tickettype_id: 3, source: 5 }]));
+      expect(cap.posted()).toMatchObject({ sourceId: 5 });
+    });
+  });
+
   it("answers non-2xx when the note cannot be posted, so CIPP opens a new ticket", async () => {
     await withCipp(async () => {
       captureGoreloCreate({ number: 9003 });
