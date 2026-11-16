@@ -65,6 +65,11 @@ jobs:
           git checkout -B "$BRANCH"
           git add -A
           git commit -m "chore: sync ${SPEC} swagger snapshot from live spec"
+          # actions/checkout only fetches main, so without this there is no
+          # remote-tracking ref for $BRANCH and --force-with-lease rejects every
+          # push to an existing snapshot branch as "stale info". Fetch it (it may
+          # not exist yet on the first drift) so the lease has something to check.
+          git fetch origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" || true
           git push --force-with-lease origin "$BRANCH"
 
           # Build the PR body from the drift summary.

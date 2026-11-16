@@ -79,7 +79,7 @@ each other** — both import core/, and they meet only through `core/events.ts` 
 | `scripts/gorelo-ids.sh` | dump groups/types/statuses/clients to fill the vars |
 | `scripts/halo-cred.sh` / `.ps1` | generate a per-product Halo OAuth pair, push the secret, print the creds |
 | `scripts/check-import-boundaries.mjs` | the ingress↔egress boundary check (CI + `npm run lint:boundaries`) |
-| `test/` | vitest specs (`@cloudflare/vitest-pool-workers`) |
+| `test/` | vitest specs (`@cloudflare/vitest-plugin`) |
 
 ## Deploy
 
