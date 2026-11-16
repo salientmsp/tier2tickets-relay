@@ -92,6 +92,10 @@ const HALO_RESOURCES = new Set([
   "priorities",
   "agent",
   "agents",
+  // GET /api/Lookup?lookupid=N -- Halo's generic dropdown lists. Nerdio Manager for
+  // MSP reads lookupid=27 while configuring its Halo integration (2026-11-16) and
+  // stops at a 404; answered with an empty list in handleConfig.
+  "lookup",
 ]);
 
 /** Last non-numeric path segment, lowercased: `/api/Users/123` -> `users`, `/token` -> `token`. */
@@ -478,6 +482,11 @@ function handleConfig(env: Env, resource: string): Response {
     case "agent":
     case "agents":
       return jsonResponse(200, { agents: [], record_count: 0, page_no: 1, page_size: 100 });
+    case "lookup":
+      // Bare array of Lookup items, like Halo. Gorelo has no equivalent generic code
+      // tables, so every lookupid answers empty: a picker shows no options rather
+      // than the integration failing on a 404.
+      return jsonResponse(200, []);
     default:
       return jsonResponse(200, []);
   }
