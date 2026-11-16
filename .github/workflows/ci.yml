@@ -21,9 +21,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 26.10.0
+          node-version: 26.13.1
           cache: npm
 
       # Structural check — no dependencies needed, so run it before install to

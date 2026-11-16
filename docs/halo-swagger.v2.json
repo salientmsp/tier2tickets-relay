@@ -16804,6 +16804,14 @@
             "schema": {
               "type": "integer"
             }
+          },
+          {
+            "name": "includeadmanager",
+            "in": "query",
+            "description": "(bool) Include the admanager field for each user in the response.",
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -63613,6 +63621,14 @@
             "schema": {
               "type": "integer"
             }
+          },
+          {
+            "name": "includeadmanager",
+            "in": "query",
+            "description": "(bool) Include the admanager field for each user in the response.",
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -103655,6 +103671,14 @@
             "nullable": true
           },
           "enable_CSP_logging": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "include_clients_users_licences": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "improved_ip_search": {
             "type": "boolean",
             "nullable": true
           },
@@ -152334,6 +152358,10 @@
             "format": "double",
             "nullable": true
           },
+          "is_meter": {
+            "type": "boolean",
+            "nullable": true
+          },
           "baseprice_converted": {
             "type": "number",
             "format": "double",
@@ -162989,6 +163017,10 @@
           },
           "add_related_businessapps_to_parent": {
             "type": "boolean",
+            "nullable": true
+          },
+          "from_mailbox_display": {
+            "type": "string",
             "nullable": true
           },
           "project_type": {
@@ -188810,6 +188842,10 @@
             "nullable": true
           },
           "campaign_step_name": {
+            "type": "string",
+            "nullable": true
+          },
+          "admanager": {
             "type": "string",
             "nullable": true
           },
