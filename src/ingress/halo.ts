@@ -20,7 +20,7 @@ import {
   type DeviceFullRow,
 } from "../core/db.js";
 import { notify } from "@ambersecurityinc/notifly";
-import { GoreloClient, GoreloError, extractTicketNumber } from "../core/gorelo.js";
+import { type GoreloTicketDetail, GoreloClient, GoreloError, extractTicketNumber } from "../core/gorelo.js";
 import { breadcrumb, debug, debugOn, describeError } from "../core/log.js";
 import { normalizeEmail } from "../core/parse.js";
 import { assetNum, syncAll } from "./sync.js";
@@ -480,6 +480,63 @@ async function handleTicketTypes(env: Env): Promise<Response> {
 }
 
 /**
+ * Raise a ticket to VIP_PRIORITY when its matched contact carries one of the
+ * VIP_CONTACT_TAG_IDS (a Gorelo contact tag). Only raises: an already-higher priority
+ * (lower non-zero id, e.g. an emergency's Urgent) is kept. Off -- and no Gorelo call --
+ * unless VIP_CONTACT_TAG_IDS is set and a contact matched. Best-effort: a failed lookup
+ * leaves the priority as built.
+ */
+async function applyVipPriority(env: Env, cmd: CreatePublicTicketCommand): Promise<void> {
+  const vipTags = new Set(
+    String(env.VIP_CONTACT_TAG_IDS ?? "")
+      .split(/[\s,]+/)
+      .map(Number)
+      .filter((n) => Number.isInteger(n) && n > 0),
+  );
+  if (!vipTags.size || cmd.contactId == null) return;
+  const vipPriority = num(env.VIP_PRIORITY) ?? 2;
+  if (cmd.priorityId > 0 && cmd.priorityId <= vipPriority) return; // already at least as high
+  try {
+    const tags = await new GoreloClient(env).getContactTagIds(cmd.contactId);
+    if (tags.some((t) => vipTags.has(t))) {
+      cmd.priorityId = vipPriority as PublicTicketPriority;
+      breadcrumb(`HALO VIP contact=${cmd.contactId} -> priority ${vipPriority}`);
+    }
+  } catch (err) {
+    breadcrumb(`HALO VIP lookup failed contact=${cmd.contactId}: ${describeError(err)}`);
+  }
+}
+
+/**
+ * GET /api/Agent -- the Gorelo account's active technicians (GET /v1/organization/users)
+ * as Halo agents, so a vendor's assignee picker is populated. Ids are Gorelo user ids.
+ * The relay does not assign tickets from it; an empty list is served if Gorelo fails.
+ */
+async function handleAgents(env: Env): Promise<Response> {
+  let agents: Array<Record<string, unknown>> = [];
+  try {
+    const users = await new GoreloClient(env).listActiveUsers();
+    agents = users.map((u) => {
+      const name = `${u.firstName} ${u.lastName}`.trim() || u.email;
+      return {
+        id: u.id,
+        name,
+        firstname: u.firstName,
+        surname: u.lastName,
+        initials: `${u.firstName.charAt(0)}${u.lastName.charAt(0)}`.toUpperCase(),
+        email: u.email,
+        isdisabled: false,
+        use: "agent",
+        team: "",
+      };
+    });
+  } catch (err) {
+    breadcrumb(`HALO agent list failed, serving none ${describeError(err)}`);
+  }
+  return jsonResponse(200, { agents, record_count: agents.length, page_no: 1, page_size: Math.max(agents.length, 100) });
+}
+
+/**
  * The Gorelo type id for a create: the client's `tickettype_id` when it names a real
  * Gorelo type (as offered by handleTicketTypes), else DEFAULT_TYPE_ID. Only a
  * non-default id costs a Gorelo lookup; an unknown or unverifiable id falls back to
@@ -554,6 +611,7 @@ function handleConfig(env: Env, resource: string, url?: URL): Response {
       return jsonResponse(200, GORELO_PRIORITIES.map(([id, name]) => haloPriority(id, name)));
     case "agent":
     case "agents":
+      // Async (live Gorelo technicians) -- answered in handleApi before reaching here.
       return jsonResponse(200, { agents: [], record_count: 0, page_no: 1, page_size: 100 });
     case "lookup": {
       // Bare array of Lookup items, like Halo. Only the severity list has a Gorelo
@@ -1002,17 +1060,35 @@ async function recordCreatedTicket(
  * answer stops Huntress from treating the create as failed and retrying (a
  * duplicate source). 404 when we have no record of that id.
  */
+/**
+ * Map a Gorelo status id onto the Halo statuses served at /api/Status (1 New,
+ * 2 In Progress, 3 Resolved, 4 Closed). Gorelo's 1/3/4 are New/Solved/Closed; every
+ * other Gorelo status (Open, On Hold, Waiting on ..., Reopened) is in progress.
+ */
+function haloStatusFromGorelo(statusId: number): number {
+  return statusId === 1 || statusId === 3 || statusId === 4 ? statusId : 2;
+}
+
 async function handleGetTicketById(env: Env, id: number): Promise<Response> {
   const row = await getCreatedTicket(env.DB, id);
   if (!row) return jsonResponse(404, { id, message: "ticket not found" });
+  // Live state from Gorelo (GET /v1/tickets/{id}) so a client's verify/poll sees a
+  // ticket a tech has since solved or reopened; the ledger row is the fallback.
+  let live: GoreloTicketDetail | null = null;
+  if (row.gorelo_id) {
+    live = await new GoreloClient(env)
+      .getTicket(row.gorelo_id, 1)
+      .catch((err) => (breadcrumb(`HALO ticket read-back failed gorelo_id=${row.gorelo_id}: ${describeError(err)}`), null));
+  }
   return jsonResponse(200, {
     id: row.halo_id,
-    summary: row.title ?? "",
+    summary: live?.title ?? row.title ?? "",
     client_id: row.client_id ?? 0,
     site_id: 0,
     user_id: row.contact_id ?? 0,
-    tickettype_id: Number(env.DEFAULT_TYPE_ID),
-    status_id: row.status_id ?? Number(env.DEFAULT_STATUS_ID),
+    tickettype_id: live?.typeId ?? Number(env.DEFAULT_TYPE_ID),
+    status_id:
+      live?.statusId != null ? haloStatusFromGorelo(live.statusId) : (row.status_id ?? Number(env.DEFAULT_STATUS_ID)),
     gorelo_ticket_id: row.gorelo_id,
     gorelo_ticket_number: row.number,
     gorelo_display_number: row.display_number,
@@ -1028,6 +1104,7 @@ async function handleCreateTicket(
   const t = firstTicket(parseJson(body));
   const routing = await resolveRouting(env, t, product);
   const cmd = buildTicketCommand(env, t, routing, product, await resolveTypeId(env, t));
+  await applyVipPriority(env, cmd);
   const haloId = assetNum(crypto.randomUUID()) || Date.now() % 1_000_000_000_000;
 
   // Huntress resolution: Huntress signals "resolved" by EDITING the original ticket
@@ -1632,6 +1709,7 @@ async function handleApi(
     if (resource === "site" || resource === "sites") return handleSite(env, url);
     if (resource === "asset" || resource === "assets") return handleAsset(env, url);
     if (resource === "tickettype" || resource === "tickettypes") return handleTicketTypes(env);
+    if (resource === "agent" || resource === "agents") return handleAgents(env);
     return handleConfig(env, resource, url);
   }
   return jsonResponse(200, []);

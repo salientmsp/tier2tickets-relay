@@ -65,6 +65,11 @@ function installFetch(): void {
     if (req.method === "GET" && url.host === JIRA_HOST && url.pathname === "/_edge/tenant_info") {
       return json(200, { cloudId: JIRA_CLOUD_ID });
     }
+    // GET /v1/tickets/{id} (live ticket read) answers 404 unless a test mocks it: the
+    // relay falls back to the list scan / its ledger, which is what these tests exercise.
+    if (req.method === "GET" && /^\/v1\/tickets\/[0-9a-f-]{36}$/i.test(url.pathname)) {
+      return new Response("", { status: 404 });
+    }
     throw new Error(`unmocked fetch: ${req.method} ${req.url}`);
   }) as typeof fetch;
 }

@@ -15,11 +15,14 @@ import type { AlertLevel, Env, PostAlertRequest } from "../core/types.js";
  * retrying monitor never re-raises the same alert.
  *
  * Events map to Gorelo's NATIVE alert endpoint (POST /v1/alerts/) — an alert, not a
- * service ticket. That endpoint is create-only (no id, no update/close), so the relay
- * owns the lifecycle in D1: a `triggered` event posts ONE Gorelo alert and remembers
- * it by `dedupe_key`; repeats update the stored row WITHOUT re-posting; a `resolved`
- * event posts a "Resolved: …" alert and marks the stored row resolved; `heartbeat`
- * events only stamp last-seen (no Gorelo call).
+ * service ticket. The create returns no id, so the relay owns the lifecycle in D1: a
+ * `triggered` event posts ONE Gorelo alert (linked to the mirrored device when the host
+ * matches one of the alert's client) and remembers it by `dedupe_key`, along with the
+ * Gorelo alert id it looks up right after (GET /v1/alerts); repeats update the stored
+ * row WITHOUT re-posting; a `resolved` event dismisses that Gorelo alert
+ * (PATCH /v1/alerts/{id}) -- or, with no id or a refused dismissal, posts a
+ * "Resolved: …" alert -- and marks the stored row resolved; `heartbeat` events only
+ * stamp last-seen (no Gorelo call).
  */
 
 // The alert lifecycle statuses a source may send.
@@ -294,11 +297,24 @@ async function resolveClientId(env: Env, alert: Alert): Promise<number> {
   return Number(env.CATCHALL_CLIENT_ID) || 0;
 }
 
+/**
+ * The Gorelo agent asset (device) an alert is about: the mirrored device whose hostname
+ * matches the alert's `host`, only when it belongs to the alert's client (Gorelo rejects
+ * an AgentAssetId of another client). Null when no such device is mirrored.
+ */
+async function resolveAgentAssetId(env: Env, alert: Alert, clientId: number): Promise<string | null> {
+  const host = normalizeHost(alert.host);
+  if (!host) return null;
+  const device = await findDeviceFullByHostname(env.DB, host);
+  return device?.agent_id && device.client_id === clientId ? device.agent_id : null;
+}
+
 /** Build a Gorelo PostAlertRequest for an alert (optionally overriding name/severity/description). */
 function buildAlertRequest(
   clientId: number,
   alert: Alert,
   overrides: Partial<PostAlertRequest> = {},
+  agentAssetId: string | null = null,
 ): PostAlertRequest {
   return {
     name: alert.title,
@@ -306,6 +322,7 @@ function buildAlertRequest(
     resource: alert.host, // the host/service the alert is raised for
     severity: alertLevel(alert.severity),
     description: buildDescription(alert),
+    ...(agentAssetId ? { agentAssetId } : {}),
     ...overrides,
   };
 }
@@ -401,16 +418,33 @@ async function applyAlert(env: Env, alert: Alert, eventKey: string): Promise<Out
     // Nothing open to resolve -> idempotent success, no Gorelo call (spec).
     if (!existing || existing.status !== "open") return { action: "duplicate-ignored" };
 
-    // Gorelo alerts are create-only (no close), so post a "Resolved: …" alert to
-    // signal the clear, then mark our row resolved. The post is the gate: on failure
-    // we leave the alert open so a retry re-posts.
-    const clientId = await resolveClientId(env, alert);
-    await client.postAlert(
-      buildAlertRequest(clientId, alert, {
-        name: `Resolved: ${existing.title || alert.title}`,
-        description: `Resolved.\n\n${buildDescription(alert)}`,
-      }),
-    );
+    // Dismiss the original Gorelo alert (PATCH /v1/alerts/{id}, StatusId 2) when we know
+    // its id. Otherwise -- no id recorded, or Gorelo refuses (e.g. the alert was already
+    // turned into a ticket) -- fall back to posting a "Resolved: …" alert to signal the
+    // clear. Either is the gate: on failure we leave the alert open so a retry re-runs.
+    let dismissed = false;
+    if (existing.gorelo_id) {
+      try {
+        await client.updateAlertStatus(existing.gorelo_id, 2);
+        dismissed = true;
+      } catch (err) {
+        breadcrumb(`ALERT dismiss failed gorelo_alert=${existing.gorelo_id}, posting a Resolved alert: ${describeError(err)}`);
+      }
+    }
+    if (!dismissed) {
+      const clientId = await resolveClientId(env, alert);
+      await client.postAlert(
+        buildAlertRequest(
+          clientId,
+          alert,
+          {
+            name: `Resolved: ${existing.title || alert.title}`,
+            description: `Resolved.\n\n${buildDescription(alert)}`,
+          },
+          await resolveAgentAssetId(env, alert, clientId),
+        ),
+      );
+    }
     await putAlert(env.DB, {
       ...existing,
       severity: alert.severity,
@@ -420,7 +454,7 @@ async function applyAlert(env: Env, alert: Alert, eventKey: string): Promise<Out
       updated_at: now,
       resolved_at: now,
     });
-    return { action: "resolved", posted: true };
+    return { action: "resolved", posted: !dismissed };
   }
 
   // status === "triggered"
@@ -444,7 +478,16 @@ async function applyAlert(env: Env, alert: Alert, eventKey: string): Promise<Out
 
   // No open alert (new, or re-triggered after a resolve) -> post a fresh Gorelo alert.
   const clientId = await resolveClientId(env, alert);
-  await client.postAlert(buildAlertRequest(clientId, alert));
+  const agentAssetId = await resolveAgentAssetId(env, alert, clientId);
+  // POST /v1/alerts returns no id: note the time, then find the alert we just raised so
+  // a later "resolved" can dismiss it. Best-effort -- without an id the resolve falls
+  // back to posting a "Resolved: …" alert, the pre-2026-11 behavior.
+  const since = new Date(Date.now() - 60_000).toISOString();
+  await client.postAlert(buildAlertRequest(clientId, alert, {}, agentAssetId));
+  const goreloAlertId = await client.findRecentApiAlert(clientId, alert.title, since).catch((err) => {
+    breadcrumb(`ALERT id lookup failed (resolve will post a Resolved alert): ${describeError(err)}`);
+    return null;
+  });
   await putAlert(env.DB, {
     dedupe_key: alert.dedupe_key,
     monitor_id: alert.monitor_id,
@@ -455,7 +498,7 @@ async function applyAlert(env: Env, alert: Alert, eventKey: string): Promise<Out
     status: "open",
     title: alert.title,
     message: alert.message,
-    gorelo_id: null,
+    gorelo_id: goreloAlertId, // the Gorelo alert id, for dismissal on resolve
     number: null,
     display_number: null,
     last_event_id: eventKey || null,

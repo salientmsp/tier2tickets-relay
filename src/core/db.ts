@@ -124,9 +124,10 @@ export async function initSchema(db: D1Database): Promise<void> {
     // 'resolved'); `last_event_id` is the last processed Idempotency-Key / event_id so a
     // re-POST of the SAME event is ignored rather than treated as an update. Gorelo's
     // alert API is create-only (no id/close), so dedup and the open→resolved transition
-    // are tracked here — the alert is posted once; resolution posts a "Resolved: …"
-    // alert (see src/alerts.ts). The gorelo_id/number/display_number columns are legacy
-    // (unused for native alerts, which return no id) and left null.
+    // are tracked here — the alert is posted once. `gorelo_id` holds the Gorelo alert id,
+    // found right after the post (GET /v1/alerts), so resolution can dismiss it
+    // (PATCH /v1/alerts/{id}); without one, resolution posts a "Resolved: …" alert
+    // (see src/ingress/alerts.ts). number/display_number are legacy and left null.
     db.prepare(
       `CREATE TABLE IF NOT EXISTS alerts (
         dedupe_key     TEXT PRIMARY KEY,

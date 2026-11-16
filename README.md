@@ -172,7 +172,7 @@ wrangler queues create tier2tickets-sync-staging --env staging
 npm run db:migrate:staging
 
 # 3. Re-derive the tenant-specific Gorelo ids against the STAGING key and paste them in
-#    (DEFAULT_GROUP_ID, DEFAULT_TYPE_ID, CATCHALL_CLIENT_ID, and the three tag ids are
+#    (DEFAULT_GROUP_ID, DEFAULT_TYPE_ID, CATCHALL_CLIENT_ID, and the four tag ids are
 #     "0" placeholders until you do — staging is not functional before this step)
 GORELO_API_KEY=<staging key> ./scripts/gorelo-ids.sh
 
@@ -467,12 +467,20 @@ of the agent UUID (`asset_num`, stored in D1), mapped back on create.
 **Tagging:** every ticket gets a "Submitted via …" Gorelo tag (via `tagIds`) naming the
 source that submitted it, for filtering/reporting. Each product carries its own tag —
 Helpdesk Buttons/Tier2 → `HDB_TAG_ID` (31974 "Submitted VIA HDB"), Huntress →
-`HUNTRESS_TAG_ID` (32870 "Submitted via Huntress"). A ticket whose product has no tag of
+`HUNTRESS_TAG_ID` (32870 "Submitted via Huntress"), Nerdio → `NERDIO_TAG_ID` (34732
+"Submitted via Nerdio"). A ticket whose product has no tag of
 its own — a new service onboarded before its dedicated tag is wired up, or a request that
 matched no product — falls back to `FALLBACK_TAG_ID` (32885 "Submitted via API") so
 nothing is left untagged. These are tags, not the ticket type (`DEFAULT_TYPE_ID` stays
 7045 "Incident"). To add a per-service tag: set the product's `tagVar` in
-`src/products.ts` and its `*_TAG_ID` var in `wrangler.toml`.
+`src/products.ts` and its `*_TAG_ID` var in `wrangler.toml`. `scripts/gorelo-ids.sh` lists the
+account's ticket tag ids (`GET /v1/tickets/tags`).
+
+**VIP contacts.** Set `VIP_CONTACT_TAG_IDS` to one or more Gorelo *contact* tag ids
+(`scripts/gorelo-ids.sh` lists them, from `GET /v1/contacts/tags`) and a ticket whose
+matched contact carries one of those tags is raised to `VIP_PRIORITY` (default `2`, High).
+It only ever raises a priority, never lowers it, so an emergency press stays Urgent. Empty
+(the default) turns it off, and no contact lookup is made.
 
 **Attachments (screenshots / diagnostic data):** the binaries are **not** sent to us.
 HDB hosts the full report and the remote session on its own portal and only sends

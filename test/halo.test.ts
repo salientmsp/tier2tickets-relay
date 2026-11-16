@@ -40,6 +40,15 @@ function installFetch(): void {
     if (req.method === "GET" && url.pathname === "/v1/tickets/types") {
       return new Response("", { status: 404 });
     }
+    // Same for the technician list behind /api/Agent (falls back to no agents).
+    if (req.method === "GET" && url.pathname === "/v1/organization/users") {
+      return new Response("", { status: 404 });
+    }
+    // GET /v1/tickets/{id} (live ticket read) answers 404 unless a test mocks it: the
+    // relay falls back to the list scan / its ledger, which is what these tests exercise.
+    if (req.method === "GET" && /^\/v1\/tickets\/[0-9a-f-]{36}$/i.test(url.pathname)) {
+      return new Response("", { status: 404 });
+    }
     throw new Error(`unmocked fetch: ${req.method} ${req.url}`);
   }) as typeof fetch;
 }
@@ -603,6 +612,27 @@ describe("Halo lookups (Gorelo-backed)", () => {
       [7046, "Request"],
       [7047, "Proactive"],
     ]);
+  });
+
+  it("GET /api/Agent lists the active Gorelo technicians", async () => {
+    let query = "";
+    routes.push({
+      method: "GET",
+      match: (u) => u.pathname === "/v1/organization/users",
+      handler: (r) => {
+        query = new URL(r.url).search;
+        return json(200, envelope(pascal([{ id: 501, firstName: "Ada", lastName: "Lovelace", email: "ada@x.test" }])));
+      },
+    });
+    const j = (await (await req("/api/Agent")).json()) as { agents: Array<Record<string, unknown>>; record_count: number };
+    expect(query).toContain("StatusIds=2");
+    expect(j.record_count).toBe(1);
+    expect(j.agents[0]).toMatchObject({ id: 501, name: "Ada Lovelace", initials: "AL", email: "ada@x.test" });
+  });
+
+  it("GET /api/Agent serves no agents when Gorelo fails", async () => {
+    const j = (await (await req("/api/Agent")).json()) as { agents: unknown[] };
+    expect(j.agents).toEqual([]);
   });
 
   it("GET /api/Team returns a full-shape bare array", async () => {
@@ -1874,12 +1904,105 @@ describe("Nerdio Manager for MSP (replayed live payloads, 2026-11-16)", () => {
     });
   });
 
+  it("reads the number via GET /v1/tickets/{id} and reports live status on the verify GET", async () => {
+    await withNerdio(async () => {
+      const uuid = "cb83b6cf-959c-4eed-afb8-ba3e18a3c53a";
+      let liveStatus = 1;
+      routes.push({
+        method: "GET",
+        match: (u) => u.pathname === `/v1/tickets/${uuid}`,
+        handler: () =>
+          json(200, envelope(pascal({
+            id: uuid, number: 8300, displayNumber: "8300", title: "From detail",
+            status: { id: liveStatus, name: "x" }, type: { id: 7046, name: "Request" }, priority: { id: 4, name: "Low" },
+          }))),
+      });
+      // The list scan would say 999: the direct read must win.
+      captureGoreloCreate({ uuid, number: 999 });
+      const created = (await (await req("/api/tickets", nerdioInit([{ ...nerdioTicket, tickettype_id: 3 }]))).json()) as { id: number };
+      expect(created.id).toBe(8300);
+
+      liveStatus = 6; // e.g. "On Hold" in Gorelo -> Halo "In Progress" (2)
+      const verify = (await (await req("/api/Tickets/8300", { method: "GET", headers: { "CF-Connecting-IP": NERDIO_IP } })).json()) as Record<string, unknown>;
+      expect(verify).toMatchObject({ id: 8300, status_id: 2, tickettype_id: 7046, summary: "From detail" });
+
+      liveStatus = 3; // Solved in Gorelo -> Halo "Resolved" (3)
+      const solved = (await (await req("/api/Tickets/8300", { method: "GET", headers: { "CF-Connecting-IP": NERDIO_IP } })).json()) as Record<string, unknown>;
+      expect(solved.status_id).toBe(3);
+    });
+  });
+
   it("does not touch Gorelo for a closing action on a ticket it never created", async () => {
     await withNerdio(async () => {
       const update = captureGoreloUpdate();
       const res = await req("/api/actions", nerdioInit([{ ticket_id: 424242, new_status: "3", note_html: "x" }]));
       expect(res.status).toBe(201);
       expect(update.calls()).toBe(0);
+    });
+  });
+});
+
+describe("VIP contacts (VIP_CONTACT_TAG_IDS)", () => {
+  async function createFor(tagIds: number[] | null): Promise<{ posted: Record<string, unknown> | undefined; lookups: number }> {
+    let lookups = 0;
+    if (tagIds) {
+      routes.push({
+        method: "GET",
+        match: (u) => u.pathname === "/v1/contacts/55",
+        handler: () => {
+          lookups++;
+          return json(200, envelope(pascal({ id: 55, firstName: "Jane", tagIds })));
+        },
+      });
+    }
+    const cap = captureGoreloCreate();
+    const created = await req("/tickets", {
+      method: "POST",
+      headers: { "content-type": "application/json", "halo-app-name": "tier2tech" },
+      body: JSON.stringify([{ summary: "help", details_html: reportHtml({ email: "user@corp.com" }) }]),
+    });
+    const haloId = ((await created.json()) as { id: number }).id;
+    await req("/actions", {
+      method: "POST",
+      headers: { "content-type": "application/json", "halo-app-name": "tier2tech" },
+      body: JSON.stringify([{ note_html: `<p>You have a new ticket number ${haloId} from your Helpdesk</p>` }]),
+    });
+    return { posted: cap.posted(), lookups };
+  }
+
+  async function withVip(tags: string, fn: () => Promise<void>): Promise<void> {
+    const e = env as { VIP_CONTACT_TAG_IDS?: string; VIP_PRIORITY?: string };
+    const prev = { ...e };
+    e.VIP_CONTACT_TAG_IDS = tags;
+    e.VIP_PRIORITY = "1";
+    try {
+      await fn();
+    } finally {
+      e.VIP_CONTACT_TAG_IDS = prev.VIP_CONTACT_TAG_IDS;
+      e.VIP_PRIORITY = prev.VIP_PRIORITY;
+    }
+  }
+
+  it("raises a ticket from a contact with a VIP tag to VIP_PRIORITY", async () => {
+    await withVip("900, 901", async () => {
+      const { posted, lookups } = await createFor([5, 901]);
+      expect(lookups).toBe(1);
+      expect(posted).toMatchObject({ contactId: 55, priorityId: 1 });
+    });
+  });
+
+  it("leaves a non-VIP contact at the default priority", async () => {
+    await withVip("900", async () => {
+      const { posted } = await createFor([5]);
+      expect(posted).toMatchObject({ contactId: 55, priorityId: 2 });
+    });
+  });
+
+  it("is off when VIP_CONTACT_TAG_IDS is empty: no contact lookup at all", async () => {
+    await withVip("", async () => {
+      const { posted, lookups } = await createFor([900]);
+      expect(lookups).toBe(0);
+      expect(posted).toMatchObject({ priorityId: 2 });
     });
   });
 });

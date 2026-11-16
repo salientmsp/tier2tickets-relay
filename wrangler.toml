@@ -120,6 +120,8 @@ CATCHALL_CLIENT_ID = "15567"
 HDB_TAG_ID = "31974"
 # 32870 "Submitted via Huntress" — Huntress tickets.
 HUNTRESS_TAG_ID = "32870"
+# 34732 "Submitted via Nerdio" — Nerdio Manager for MSP tickets.
+NERDIO_TAG_ID = "34732"
 # 32885 "Submitted via API" — catch-all applied when a ticket's product has no tag of its
 # own (a service onboarded before its dedicated tag is wired up, or a request that matched
 # no product). Ensures nothing is left untagged if we forget to add a per-service tag.
@@ -129,6 +131,11 @@ FALLBACK_TAG_ID = "32885"
 # GET /v1/tickets/priorities: 1 = "Urgent", the top priority.
 # Unset to always use DEFAULT_PRIORITY.
 EMERGENCY_PRIORITY = "1"
+# VIP contacts: Gorelo contact tag ids (GET /v1/contacts/tags; scripts/gorelo-ids.sh),
+# comma/space separated. A ticket whose matched contact has one of these tags is raised
+# to VIP_PRIORITY (never lowered). Empty = off, and no contact lookup is made.
+VIP_CONTACT_TAG_IDS = ""
+VIP_PRIORITY = "2"
 
 # Ask Gorelo to send its "ticket created" email to the requester. "false" (default)
 # never sends it. "true" sends it ONLY when the Worker resolved a real client contact
@@ -328,6 +335,7 @@ DEFAULT_TYPE_ID = "0"        # TODO(staging): ticket type id ("Incident" in prod
 CATCHALL_CLIENT_ID = "0"     # TODO(staging): fallback client id
 HDB_TAG_ID = "0"             # TODO(staging): "Submitted VIA HDB" tag id
 HUNTRESS_TAG_ID = "0"        # TODO(staging): "Submitted via Huntress" tag id
+NERDIO_TAG_ID = "0"          # TODO(staging): "Submitted via Nerdio" tag id
 FALLBACK_TAG_ID = "0"        # TODO(staging): "Submitted via API" tag id
 
 # Fixed Gorelo enums / universal ids — NOT tenant-specific, so these carry over as-is.
@@ -337,6 +345,11 @@ DEFAULT_RESOLVED_STATUS_ID = "4"   # 4 = Closed (built-in; the default for non-p
 DEFAULT_PRIORITY = "3"
 DEFAULT_SOURCE = "6"
 EMERGENCY_PRIORITY = "1"
+# VIP contacts: Gorelo contact tag ids (GET /v1/contacts/tags; scripts/gorelo-ids.sh),
+# comma/space separated. A ticket whose matched contact has one of these tags is raised
+# to VIP_PRIORITY (never lowered). Empty = off, and no contact lookup is made.
+VIP_CONTACT_TAG_IDS = ""
+VIP_PRIORITY = "2"
 
 # OFF for staging, and the single most important guard here. A staging Gorelo tenant is
 # usually seeded from production, so its contacts carry REAL email addresses — leaving

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Dump the Gorelo IDs needed to fill wrangler.toml [vars]:
-#   ticket types, statuses, priorities and sources, and clients (id / name / domains).
+#   ticket types, statuses, priorities, sources and tags, contact tags, and clients (id / name / domains).
 #
 # Usage:
 #   GORELO_API_KEY=xxxx ./scripts/gorelo-ids.sh
@@ -87,6 +87,14 @@ echo
 echo "=== Ticket sources  (GET /v1/tickets/sources)  -> DEFAULT_SOURCE ==="
 echo "  (7 = Messenger is read-only: it appears on tickets but create/update reject it.)"
 dump /v1/tickets/sources "${ROWS}"
+
+echo
+echo "=== Ticket tags  (GET /v1/tickets/tags)  -> HDB_TAG_ID, HUNTRESS_TAG_ID, NERDIO_TAG_ID, FALLBACK_TAG_ID ==="
+dump /v1/tickets/tags "${ROWS}"
+
+echo
+echo "=== Contact tags  (GET /v1/contacts/tags)  -> VIP_CONTACT_TAG_IDS ==="
+dump /v1/contacts/tags "${ROWS}"
 
 echo
 echo "=== Clients  (GET /v1/clients)  -> CATCHALL_CLIENT_ID + domain mirror ==="

@@ -81,8 +81,14 @@ DEFAULT_SOURCE = "6"
 CATCHALL_CLIENT_ID = "15567"
 HDB_TAG_ID = "31974"
 HUNTRESS_TAG_ID = "32870"
+NERDIO_TAG_ID = "34732"
 FALLBACK_TAG_ID = "32885"
 EMERGENCY_PRIORITY = "1"
+# VIP contacts: Gorelo contact tag ids (GET /v1/contacts/tags; scripts/gorelo-ids.sh),
+# comma/space separated. A ticket whose matched contact has one of these tags is raised
+# to VIP_PRIORITY (never lowered). Empty = off, and no contact lookup is made.
+VIP_CONTACT_TAG_IDS = ""
+VIP_PRIORITY = "2"
 
 # OFF for dev — this is the setting that emails a real human. Prod sends Gorelo's
 # "ticket created" mail whenever a press resolves a real contact; a local test press

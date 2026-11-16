@@ -13,6 +13,11 @@ let realFetch: typeof fetch;
 let alertPosts = 0;
 let lastAlertBody: Record<string, unknown> | null = null;
 let failCreate = false;
+// GET /v1/alerts answers with these (the relay looks up the id of the alert it just
+// raised); PATCH /v1/alerts/{id} dismissals are recorded in `dismissed`.
+let goreloAlerts: Array<Record<string, unknown>> = [];
+let dismissed: Array<{ id: string; body: Record<string, unknown> }> = [];
+let failDismiss = false;
 
 beforeAll(() => {
   realFetch = globalThis.fetch;
@@ -28,6 +33,9 @@ function installFetch(): void {
   alertPosts = 0;
   lastAlertBody = null;
   failCreate = false;
+  goreloAlerts = [];
+  dismissed = [];
+  failDismiss = false;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const req = new Request(input as RequestInfo, init);
     const url = new URL(req.url);
@@ -37,6 +45,15 @@ function installFetch(): void {
       }
       alertPosts += 1;
       lastAlertBody = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+      return json(200, { StatusCode: 200, IsSuccess: true, Data: true });
+    }
+    if (req.method === "GET" && url.pathname === "/v1/alerts") {
+      return json(200, { StatusCode: 200, IsSuccess: true, Data: goreloAlerts });
+    }
+    const m = /^\/v1\/alerts\/([^/]+)$/.exec(url.pathname);
+    if (req.method === "PATCH" && m) {
+      if (failDismiss) return json(409, { StatusCode: 409, IsSuccess: false, Data: null, Notifications: [] });
+      dismissed.push({ id: m[1]!, body: (await req.json()) as Record<string, unknown> });
       return json(200, { StatusCode: 200, IsSuccess: true, Data: true });
     }
     throw new Error(`unmocked fetch: ${req.method} ${url.pathname}`);
@@ -49,6 +66,7 @@ beforeEach(async () => {
   await env.DB.batch([
     env.DB.prepare(`DELETE FROM alerts`),
     env.DB.prepare(`DELETE FROM alert_heartbeats`),
+    env.DB.prepare(`DELETE FROM devices`),
   ]);
 });
 
@@ -214,6 +232,49 @@ describe("POST /v1/alerts — resolved", () => {
     expect(alertPosts).toBe(3);
     const row = await alertRow("DB-SERVER-01:daily-restore");
     expect(row?.status).toBe("open");
+  });
+});
+
+describe("POST /v1/alerts — Gorelo alert id: dismiss on resolve, link to device", () => {
+  const ALERT_ID = "7c2b6c1e-0000-4000-8000-0000000000a1";
+
+  it("records the raised alert's id and dismisses it on resolve (no Resolved alert)", async () => {
+    goreloAlerts = [{ Id: ALERT_ID, Title: "Daily restore failed", Status: { Id: 1 } }];
+    await post(baseAlert());
+    expect((await alertRow("DB-SERVER-01:daily-restore"))?.gorelo_id).toBe(ALERT_ID);
+
+    const res = await post(baseAlert({ status: "resolved", event_id: "resolve-1" }));
+    expect((await body(res)).action).toBe("resolved");
+    expect(dismissed).toEqual([{ id: ALERT_ID, body: { StatusId: 2 } }]);
+    expect(alertPosts).toBe(1); // only the original alert, no "Resolved: …"
+    expect((await alertRow("DB-SERVER-01:daily-restore"))?.status).toBe("resolved");
+  });
+
+  it("falls back to a Resolved alert when Gorelo refuses the dismissal", async () => {
+    goreloAlerts = [{ Id: ALERT_ID, Title: "Daily restore failed" }];
+    await post(baseAlert());
+    failDismiss = true;
+    await post(baseAlert({ status: "resolved", event_id: "resolve-1" }));
+    expect(alertPosts).toBe(2);
+    expect(lastAlertBody).toMatchObject({ Name: "Resolved: Daily restore failed" });
+  });
+
+  it("does not take an id whose title does not match", async () => {
+    goreloAlerts = [{ Id: ALERT_ID, Title: "Something else" }];
+    await post(baseAlert());
+    expect((await alertRow("DB-SERVER-01:daily-restore"))?.gorelo_id).toBeNull();
+  });
+
+  it("links the alert to the mirrored device of the same client (AgentAssetId)", async () => {
+    const AGENT = "11111111-2222-4333-8444-555555555555";
+    await env.DB.prepare(
+      `INSERT INTO devices (hostname, client_id, location_id, agent_id, asset_num, display_name, serial, local_ip, public_ip, os)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    )
+      .bind("db-server-01", 4242, null, AGENT, 77, "DB-SERVER-01", "", "", "", "")
+      .run();
+    await post(baseAlert({ customer: "" }));
+    expect(lastAlertBody).toMatchObject({ ClientId: 4242, AgentAssetId: AGENT });
   });
 });
 
