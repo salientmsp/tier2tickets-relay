@@ -28418,7 +28418,7 @@
           },
           "IsUnread": {
             "type": "boolean",
-            "description": "Whether the ticket is created in an unread state. Defaults to true. Ignored when CreatedOn\r\nor ClosedOn is supplied: the ticket is created read.",
+            "description": "Whether the ticket is created in an unread state. Defaults to true. Ignored when CreatedOn\r\nor ClosedOn is supplied: the ticket is created read. An unread ticket with a ContactId\r\nalso starts the account's \"Ticket is unread\" automation rules, as a ticket the contact\r\nsubmits through the client portal does.",
             "nullable": true
           }
         },

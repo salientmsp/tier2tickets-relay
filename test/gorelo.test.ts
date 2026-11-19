@@ -93,7 +93,7 @@ describe("GoreloClient (2026-08 envelope + PascalCase wire format)", () => {
     } as CreatePublicTicketCommand;
     const result = await client().createTicket(cmd);
     expect(extractTicketNumber(result)).toBe("new-uuid");
-    expect(sent).toMatchObject({ Title: "Hi", StatusId: 1, ClientId: 10, SendTicketCreatedEmail: false });
+    expect(sent).toMatchObject({ Title: "Hi", StatusId: 1, ClientId: 10, SendTicketCreatedEmail: false, IsUnread: true });
     expect(sent).not.toHaveProperty("title"); // no camelCase key survives (would be a 400)
   });
 

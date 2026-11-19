@@ -214,6 +214,11 @@ export interface CreatePublicTicketCommand {
   // CONFIRMED (swagger): items are string UUIDs (PublicDeviceResponse.id is a uuid).
   agentAssetIds: string[];
   sendTicketCreatedEmail: boolean;
+  // Swagger: defaults to true; an unread ticket with a contactId also starts the
+  // account's "Ticket is unread" automation rules (as a portal submission does).
+  // createTicket sends true unless a command sets it, so queued commands written
+  // before this field existed get it too.
+  isUnread?: boolean;
 }
 
 /**
