@@ -1059,10 +1059,15 @@ function buildTicketCommand(
     sourceId,
     tagIds: resolveTicketTagIds(env, product),
     agentAssetIds: routing.agentAssetIds,
-    // Only let Gorelo email the requester when SEND_TICKET_CREATED_EMAIL is on AND we
+    // Only let Gorelo email the requester when SEND_TICKET_CREATED_EMAIL is on, the
+    // product is contact-facing (the user raised it, not an alert about them) AND we
     // matched a real contact — otherwise the ticket lands on the catch-all client with
     // no (or the wrong) contact, and an auto-email would notify nobody useful.
-    sendTicketCreatedEmail: env.SEND_TICKET_CREATED_EMAIL === "true" && routing.contactId != null,
+    sendTicketCreatedEmail:
+      env.SEND_TICKET_CREATED_EMAIL === "true" && product?.contactFacing === true && routing.contactId != null,
+    // Unread starts the account's "Ticket is unread" automations (SLA rules) — for
+    // every product, alerts included.
+    isUnread: true,
   };
 }
 

@@ -24833,7 +24833,7 @@
           },
           "Url": {
             "type": "string",
-            "description": "Temporary secure download link. Expires."
+            "description": "Temporary secure download link for this one file, valid for one hour. Read the record again for a fresh one."
           }
         },
         "additionalProperties": false,
@@ -30753,7 +30753,7 @@
           },
           "Url": {
             "type": "string",
-            "description": "Temporary secure download link. Expires, so don't store it - fetch the invoice again for a fresh one."
+            "description": "Temporary secure download link for this one file, valid for one hour, so don't store it - fetch the invoice again for a fresh one."
           }
         },
         "additionalProperties": false,

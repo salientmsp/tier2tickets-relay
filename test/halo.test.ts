@@ -1236,7 +1236,7 @@ describe("Halo deferred ticket create (/tickets queues, /actions creates)", () =
     expect(cap.posted()).toMatchObject({ clientId: 999, contactId: null, agentAssetIds: [] });
   });
 
-  it("sends the ticket-created email only on a matched contact when SEND_TICKET_CREATED_EMAIL=true", async () => {
+  it("sends the ticket-created email only for Helpdesk Buttons with a matched contact", async () => {
     const prev = (env as { SEND_TICKET_CREATED_EMAIL?: string }).SEND_TICKET_CREATED_EMAIL;
     (env as { SEND_TICKET_CREATED_EMAIL?: string }).SEND_TICKET_CREATED_EMAIL = "true";
     try {
@@ -1244,32 +1244,49 @@ describe("Halo deferred ticket create (/tickets queues, /actions creates)", () =
       const hit = captureGoreloCreate();
       const c1 = await req("/tickets", {
         method: "POST",
-        headers: { "content-type": "application/json", "halo-app-name": "tier2tech" },
+        headers: { "content-type": "application/json", "halo-app-name": "tier2tech", "CF-Connecting-IP": "34.202.14.153" },
         body: JSON.stringify([{ summary: "help", details_html: reportHtml({ email: "user@corp.com" }) }]),
       });
       const id1 = ((await c1.json()) as { id: number }).id;
       await req("/actions", {
         method: "POST",
-        headers: { "content-type": "application/json", "halo-app-name": "tier2tech" },
+        headers: { "content-type": "application/json", "halo-app-name": "tier2tech", "CF-Connecting-IP": "34.202.14.153" },
         body: JSON.stringify([{ ticket_id: id1, note_html: "note" }]),
       });
-      expect(hit.posted()).toMatchObject({ contactId: 55, sendTicketCreatedEmail: true });
+      expect(hit.posted()).toMatchObject({ contactId: 55, sendTicketCreatedEmail: true, isUnread: true });
 
       // No contact match (catch-all fallback): email stays suppressed even with the flag on.
       routes = []; // drop the first capture so this create hits the new route
       const miss = captureGoreloCreate({ uuid: "00000000-0000-0000-0000-000000000000" });
       const c2 = await req("/tickets", {
         method: "POST",
-        headers: { "content-type": "application/json", "halo-app-name": "tier2tech" },
+        headers: { "content-type": "application/json", "halo-app-name": "tier2tech", "CF-Connecting-IP": "34.202.14.153" },
         body: JSON.stringify([{ summary: "help", details_html: reportHtml({ email: "stranger@nowhere.test" }) }]),
       });
       const id2 = ((await c2.json()) as { id: number }).id;
       await req("/actions", {
         method: "POST",
-        headers: { "content-type": "application/json", "halo-app-name": "tier2tech" },
+        headers: { "content-type": "application/json", "halo-app-name": "tier2tech", "CF-Connecting-IP": "34.202.14.153" },
         body: JSON.stringify([{ ticket_id: id2, note_html: "x" }]),
       });
       expect(miss.posted()).toMatchObject({ contactId: null, sendTicketCreatedEmail: false });
+
+      // An unidentified source (no product) is not contact-facing: no email even with a
+      // matched contact, but still created unread.
+      routes = [];
+      const anon = captureGoreloCreate({ uuid: "22222222-2222-2222-2222-222222222222" });
+      const c3 = await req("/tickets", {
+        method: "POST",
+        headers: { "content-type": "application/json", "halo-app-name": "tier2tech" },
+        body: JSON.stringify([{ summary: "help", details_html: reportHtml({ email: "user@corp.com" }) }]),
+      });
+      const id3 = ((await c3.json()) as { id: number }).id;
+      await req("/actions", {
+        method: "POST",
+        headers: { "content-type": "application/json", "halo-app-name": "tier2tech" },
+        body: JSON.stringify([{ ticket_id: id3, note_html: "y" }]),
+      });
+      expect(anon.posted()).toMatchObject({ contactId: 55, sendTicketCreatedEmail: false, isUnread: true });
     } finally {
       (env as { SEND_TICKET_CREATED_EMAIL?: string }).SEND_TICKET_CREATED_EMAIL = prev;
     }
@@ -2016,6 +2033,9 @@ describe("CIPP HaloPSA extension (payload shapes per CIPP-API Modules/CippExtens
         contactId: 55,
         priorityId: 2,
         typeId: 7045,
+        // An alert about the user, not raised by them: unread (SLA automations), no email.
+        isUnread: true,
+        sendTicketCreatedEmail: false,
       });
     });
   });
